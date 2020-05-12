@@ -1,0 +1,20 @@
+version: '3'
+services:
+  fastify-test:
+    build:
+      context: .
+    depends_on:
+      - fastify-http
+      - fastify-https
+  fastify-http:
+    build:
+      context: .
+      dockerfile: Dockerfile.http
+    logging:
+      driver: none
+  fastify-https:
+    build:
+      context: .
+      dockerfile: Dockerfile.https
+    logging:
+      driver: none

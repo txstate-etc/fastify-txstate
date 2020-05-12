@@ -1,0 +1,14 @@
+FROM txstatemws/keygenerator as keygen
+
+FROM node:12-alpine
+WORKDIR /usr/app
+
+COPY package.json ./
+RUN npm install
+
+COPY --from=keygen /securekeys /securekeys
+COPY src src
+COPY testserver testserver
+
+ENTRYPOINT [ "npm" ]
+CMD [ "run", "testserver" ]
