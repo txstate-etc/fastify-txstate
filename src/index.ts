@@ -76,7 +76,7 @@ export default class Server {
     process.on('SIGINT', this.sigHandler)
   }
 
-  public async addErrorHandler (handler: ErrorHandler) {
+  public addErrorHandler (handler: ErrorHandler) {
     this.errorHandlers.push(handler)
   }
 

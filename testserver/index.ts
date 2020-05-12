@@ -1,8 +1,6 @@
 import Server, { RequestError } from '../src'
 
-class CustomError extends Error {
-
-}
+class CustomError extends Error {}
 
 const server = new Server()
 server.app.get('/test', async (req, res) => {
@@ -20,7 +18,11 @@ server.app.get('/422', async (req, res) => {
 server.app.get('/500', async (req, res) => {
   throw new Error('Random Error')
 })
+server.app.get('/shutdown', async (req, res) => {
+  res.send('OK')
+  await server.close(5000)
+})
 server.addErrorHandler(async (err, req, res) => {
   if (err instanceof CustomError) res.status(422).send('My Custom Error')
 })
-server.start()
+server.start().catch(e => console.error(e))
