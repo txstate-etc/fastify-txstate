@@ -1,4 +1,4 @@
-import Server, { RequestError } from '../src'
+import Server, { HttpError } from '../src'
 
 class CustomError extends Error {}
 
@@ -7,10 +7,10 @@ server.app.get('/test', async (req, res) => {
   return { hello: 'world' }
 })
 server.app.get('/403', async (req, res) => {
-  throw new RequestError(403, 'Not Authorized')
+  throw new HttpError(403, 'Not Authorized')
 })
 server.app.get('/409', async (req, res) => {
-  throw new RequestError(409)
+  throw new HttpError(409)
 })
 server.app.get('/422', async (req, res) => {
   throw new CustomError('My Custom Error')

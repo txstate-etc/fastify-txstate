@@ -35,12 +35,15 @@ export default class Server {
     })
     // eslint-disable-next-line @typescript-eslint/no-misused-promises
     this.app.setErrorHandler(async (err, req, res) => {
+      req.log.warn(err)
       for (const errorHandler of this.errorHandlers) {
         if (!res.sent) await errorHandler(err, req, res)
       }
       if (!res.sent) {
-        if (err instanceof RequestError) {
-          res.status(err.code).send(err.message)
+        if (err instanceof FailedValidationError) {
+          res.status(err.statusCode).send(err.errors)
+        } else if (err instanceof HttpError) {
+          res.status(err.statusCode).send(err.message)
         } else {
           res.status(500).send('Internal Server Error.')
         }
@@ -100,17 +103,24 @@ export default class Server {
   }
 }
 
-export class RequestError extends Error {
-  public code: number
-  public extra: any
-  constructor (code: number, message?: string, extra?: any) {
+export class HttpError extends Error {
+  public statusCode: number
+  constructor (statusCode: number, message?: string) {
     if (!message) {
-      if (code === 401) message = 'Login is required.'
-      else if (code === 403) message = 'You are not authorized for that.'
-      else message = HttpStatus.getStatusText(code)
+      if (statusCode === 401) message = 'Authentication failed.'
+      else if (statusCode === 403) message = 'You are not authorized for that.'
+      else message = HttpStatus.getStatusText(statusCode)
     }
     super(message)
-    this.code = code
-    this.extra = extra
+    this.statusCode = statusCode
+  }
+}
+
+type ValidationErrors = { [keys: string]: string[] }
+export class FailedValidationError extends HttpError {
+  public errors: ValidationErrors
+  constructor (errors: ValidationErrors) {
+    super(422, 'Validation failure.')
+    this.errors = errors
   }
 }
