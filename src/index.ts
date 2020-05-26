@@ -116,7 +116,7 @@ export class HttpError extends Error {
   }
 }
 
-type ValidationErrors = { [keys: string]: string[] }
+interface ValidationErrors { [keys: string]: string[] }
 export class FailedValidationError extends HttpError {
   public errors: ValidationErrors
   constructor (errors: ValidationErrors) {
