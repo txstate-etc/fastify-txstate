@@ -4,6 +4,11 @@ import http, { ServerResponse } from 'http'
 import HttpStatus from 'http-status-codes'
 
 type ErrorHandler = (error: Error, req: fastify.FastifyRequest, res: fastify.FastifyReply<ServerResponse>) => Promise<void>
+declare module 'fastify' {
+  interface FastifyRequest {
+    protocol: 'http' | 'https'
+  }
+}
 
 export default class Server {
   protected https = false
@@ -30,6 +35,12 @@ export default class Server {
     }
     if (typeof config.logger === 'undefined') config.logger = true
     this.app = fastify(config)
+    this.app.decorateRequest('protocol', {
+      getter () {
+        if (config.trustProxy && this.headers['x-forwarded-proto']) return this.headers['x-forwarded-proto']
+        return config.http2 ? 'https' : 'http'
+      }
+    })
     this.app.addHook('onSend', async (req, resp, payload) => {
       resp.removeHeader('X-Powered-By')
     })

@@ -2,7 +2,7 @@ import Server, { HttpError } from '../src'
 
 class CustomError extends Error {}
 
-const server = new Server()
+const server = new Server({ trustProxy: true })
 server.app.get('/test', async (req, res) => {
   return { hello: 'world' }
 })
@@ -21,6 +21,9 @@ server.app.get('/500', async (req, res) => {
 server.app.get('/shutdown', async (req, res) => {
   res.send('OK')
   await server.close(5000)
+})
+server.app.get('/protocol', async (req, res) => {
+  return { protocol: req.protocol }
 })
 server.addErrorHandler(async (err, req, res) => {
   if (err instanceof CustomError) res.status(422).send('My Custom Error')

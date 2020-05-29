@@ -58,6 +58,14 @@ describe('basic tests', () => {
     resp = await client.get('/test')
     expect(resp.data.hello).to.equal('world')
   })
+  it('should return the correct protocol', async () => {
+    const resp = await client.get('/protocol')
+    expect(resp.data.protocol).to.equal('http')
+  })
+  it('should return the correct protocol when proxying', async () => {
+    const resp = await client.get('/protocol', { headers: { 'X-Forwarded-Proto': 'https' } })
+    expect(resp.data.protocol).to.equal('https')
+  })
 })
 
 describe('https tests', () => {
@@ -69,5 +77,9 @@ describe('https tests', () => {
     const resp = await redirClient('/test')
     expect(resp.request._redirectable._redirectCount).to.be.greaterThan(0)
     expect(resp.data.hello).to.equal('world')
+  })
+  it('should return the correct protocol', async () => {
+    const resp = await httpsClient.get('/protocol')
+    expect(resp.data.protocol).to.equal('https')
   })
 })
