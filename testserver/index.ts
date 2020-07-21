@@ -19,13 +19,13 @@ server.app.get('/500', async (req, res) => {
   throw new Error('Random Error')
 })
 server.app.get('/shutdown', async (req, res) => {
-  res.send('OK')
+  await res.send('OK')
   await server.close(5000)
 })
 server.app.get('/protocol', async (req, res) => {
   return { protocol: req.protocol }
 })
 server.addErrorHandler(async (err, req, res) => {
-  if (err instanceof CustomError) res.status(422).send('My Custom Error')
+  if (err instanceof CustomError) await res.status(422).send('My Custom Error')
 })
 server.start().catch(e => console.error(e))

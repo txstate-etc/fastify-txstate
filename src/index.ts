@@ -1,9 +1,10 @@
-import fastify from 'fastify'
+import { FastifyInstance, FastifyRequest, FastifyReply, FastifyServerOptions, fastify } from 'fastify'
 import fs from 'fs'
-import http, { ServerResponse } from 'http'
+import http from 'http'
+import http2 from 'http2'
 import HttpStatus from 'http-status-codes'
 
-type ErrorHandler = (error: Error, req: fastify.FastifyRequest, res: fastify.FastifyReply<ServerResponse>) => Promise<void>
+type ErrorHandler = (error: Error, req: FastifyRequest, res: FastifyReply) => Promise<void>
 declare module 'fastify' {
   interface FastifyRequest {
     protocol: 'http' | 'https'
@@ -16,13 +17,17 @@ export default class Server {
   protected healthMessage?: string
   protected shuttingDown = false
   protected sigHandler: (signal: any) => void
-  public app: fastify.FastifyInstance
+  public app: FastifyInstance
 
-  constructor (config: Partial<fastify.ServerOptionsAsSecureHttp2> = {}) {
+  constructor (config: Partial<FastifyServerOptions & {
+    http2: true
+    https: http2.SecureServerOptions
+  }> = {}) {
     try {
       const key = fs.readFileSync('/securekeys/private.key')
       const cert = fs.readFileSync('/securekeys/cert.pem')
       config.https = {
+        ...config.https,
         allowHTTP1: true,
         key,
         cert,
@@ -32,6 +37,7 @@ export default class Server {
       this.https = true
     } catch (e) {
       this.https = false
+      delete config.https
     }
     if (typeof config.logger === 'undefined') config.logger = true
     this.app = fastify(config)
@@ -52,18 +58,18 @@ export default class Server {
       }
       if (!res.sent) {
         if (err instanceof FailedValidationError) {
-          res.status(err.statusCode).send(err.errors)
+          await res.status(err.statusCode).send(err.errors)
         } else if (err instanceof HttpError) {
-          res.status(err.statusCode).send(err.message)
+          await res.status(err.statusCode).send(err.message)
         } else {
-          res.status(500).send('Internal Server Error.')
+          await res.status(500).send('Internal Server Error.')
         }
       }
     })
     this.app.get('/health', async (req, res) => {
-      if (this.shuttingDown) res.status(503).send('Service is shutting down/restarting.')
-      else if (this.healthMessage) res.status(500).send(this.healthMessage)
-      else res.status(200).send('OK')
+      if (this.shuttingDown) await res.status(503).send('Service is shutting down/restarting.')
+      else if (this.healthMessage) await res.status(500).send(this.healthMessage)
+      else await res.status(200).send('OK')
     })
     this.sigHandler = () => {
       this.close().then(() => {
