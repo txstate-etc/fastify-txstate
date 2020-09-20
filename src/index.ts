@@ -124,7 +124,7 @@ export class HttpError extends Error {
   public statusCode: number
   constructor (statusCode: number, message?: string) {
     if (!message) {
-      if (statusCode === 401) message = 'Authentication failed.'
+      if (statusCode === 401) message = 'Authentication is required.'
       else if (statusCode === 403) message = 'You are not authorized for that.'
       else message = HttpStatus.getStatusText(statusCode)
     }

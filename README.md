@@ -27,7 +27,7 @@ server.app.get('/yourpath', async (req, res) => {
 ```
 This will result in a 400 error being returned to the client, with a plain text body: `Please provide an id.`
 
-You may skip the message string and a default will be used, e.g. `throw new HttpError(401)` sends a plain text body: `Authentication failed.`
+You may skip the message string and a default will be used, e.g. `throw new HttpError(401)` sends a plain text body: `Authentication is required.`
 ## FailedValidationError
 This class helps an API communicate with its client about errors that occured during a validation or writing operation. An `errors` object should be passed during construction whose keys correspond to the dot-separated paths of the input object that had problems, and each value is an array of error messages related to that path.
 ```javascript
