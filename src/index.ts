@@ -2,7 +2,7 @@ import { FastifyInstance, FastifyRequest, FastifyReply, FastifyServerOptions, fa
 import fs from 'fs'
 import http from 'http'
 import http2 from 'http2'
-import HttpStatus from 'http-status-codes'
+import { getReasonPhrase } from 'http-status-codes'
 
 type ErrorHandler = (error: Error, req: FastifyRequest, res: FastifyReply) => Promise<void>
 declare module 'fastify' {
@@ -133,7 +133,7 @@ export class HttpError extends Error {
     if (!message) {
       if (statusCode === 401) message = 'Authentication is required.'
       else if (statusCode === 403) message = 'You are not authorized for that.'
-      else message = HttpStatus.getStatusText(statusCode)
+      else message = getReasonPhrase(statusCode)
     }
     super(message)
     this.statusCode = statusCode
