@@ -39,7 +39,14 @@ export default class Server {
       this.https = false
       delete config.https
     }
-    if (typeof config.logger === 'undefined') config.logger = true
+    if (typeof config.logger === 'undefined') {
+      config.logger = {
+        level: 'info',
+        // @ts-expect-error
+        // fastify types are currently out of date with pino
+        prettyPrint: process.env.NODE_ENV === 'development'
+      }
+    }
     this.app = fastify(config)
     this.app.decorateRequest('protocol', {
       getter () {
