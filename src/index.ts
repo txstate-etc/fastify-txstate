@@ -5,11 +5,6 @@ import http2 from 'http2'
 import { getReasonPhrase } from 'http-status-codes'
 
 type ErrorHandler = (error: Error, req: FastifyRequest, res: FastifyReply) => Promise<void>
-declare module 'fastify' {
-  interface FastifyRequest {
-    protocol: 'http' | 'https'
-  }
-}
 
 export default class Server {
   protected https = false
@@ -42,18 +37,10 @@ export default class Server {
     if (typeof config.logger === 'undefined') {
       config.logger = {
         level: 'info',
-        // @ts-expect-error
-        // fastify types are currently out of date with pino
         prettyPrint: process.env.NODE_ENV === 'development'
       }
     }
     this.app = fastify(config)
-    this.app.decorateRequest('protocol', {
-      getter () {
-        if (config.trustProxy && this.headers['x-forwarded-proto']) return this.headers['x-forwarded-proto']
-        return config.http2 ? 'https' : 'http'
-      }
-    })
     this.app.addHook('onSend', async (req, resp, payload) => {
       resp.removeHeader('X-Powered-By')
     })
