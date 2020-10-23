@@ -70,6 +70,8 @@ export default class Server {
         process.exit()
       }).catch(e => console.error(e))
     }
+    process.on('SIGTERM', this.sigHandler)
+    process.on('SIGINT', this.sigHandler)
   }
 
   public async start (port?: number) {
@@ -86,8 +88,6 @@ export default class Server {
     } else {
       await this.app.listen(80, '::')
     }
-    process.on('SIGTERM', this.sigHandler)
-    process.on('SIGINT', this.sigHandler)
   }
 
   public addErrorHandler (handler: ErrorHandler) {
