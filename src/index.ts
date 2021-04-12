@@ -12,11 +12,14 @@ export default class Server {
   protected healthMessage?: string
   protected shuttingDown = false
   protected sigHandler: (signal: any) => void
+  protected validOriginHosts: Record<string, boolean> = {}
   public app: FastifyInstance
 
   constructor (config: Partial<FastifyServerOptions & {
     http2: true
     https: http2.SecureServerOptions
+    validOriginHosts: string[]
+    skipOriginCheck: boolean
   }> = {}) {
     try {
       const key = fs.readFileSync('/securekeys/private.key')
@@ -40,7 +43,19 @@ export default class Server {
         prettyPrint: process.env.NODE_ENV === 'development'
       }
     }
+    if (process.env.TRUST_PROXY) config.trustProxy = true
     this.app = fastify(config)
+    if (!config.skipOriginCheck && !process.env.SKIP_ORIGIN_CHECK) {
+      this.setValidOriginHosts([...(config.validOriginHosts ?? []), ...(process.env.VALID_ORIGIN_HOSTS?.split(',') ?? [])])
+      this.app.addHook('preHandler', async (req, res) => {
+        if (!req.headers.origin) return
+        const parsedOrigin = new URL(req.headers.origin)
+        if (req.hostname !== parsedOrigin.hostname && !this.validOriginHosts[parsedOrigin.hostname]) {
+          await res.status(403).send('Origin check failed. Suspected XSRF attack.')
+          return res
+        }
+      })
+    }
     this.app.addHook('onSend', async (req, resp, payload) => {
       resp.removeHeader('X-Powered-By')
     })
@@ -100,6 +115,10 @@ export default class Server {
 
   public setHealthy () {
     this.healthMessage = undefined
+  }
+
+  public setValidOriginHosts (hosts: string[]) {
+    this.validOriginHosts = hosts.reduce((validOrigins: Record<string, boolean>, origin) => ({ ...validOrigins, [origin]: true }), {})
   }
 
   public async close (softSeconds?: number) {

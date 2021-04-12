@@ -83,3 +83,26 @@ describe('https tests', () => {
     expect(resp.data.protocol).to.equal('https')
   })
 })
+
+describe('origin filtering', () => {
+  it('should allow requests from the same origin subdomain', async () => {
+    const resp = await client.get('/test', { headers: { origin: 'http://fastify-http' } })
+    expect(resp.data.hello).to.equal('world')
+  })
+  it('should allow requests when port is redundantly specified', async () => {
+    const resp = await client.get('/test', { headers: { origin: 'http://fastify-http:80' } })
+    expect(resp.data.hello).to.equal('world')
+  })
+  it('should allow requests with a different origin port', async () => {
+    const resp = await client.get('/test', { headers: { origin: 'http://fastify-http:3000' } })
+    expect(resp.data.hello).to.equal('world')
+  })
+  it('should disallow requests from a different origin subdomain', async () => {
+    try {
+      await client.get('/test', { headers: { origin: 'http://fastify-fake' } })
+      expect.fail('Should have gotten a 403.')
+    } catch (e) {
+      expect(e.response.statusCode === 403)
+    }
+  })
+})
