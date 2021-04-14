@@ -1,6 +1,6 @@
 {
   "name": "fastify-txstate",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "A small wrapper for fastify providing a set of common conventions & utility functions we use.",
   "main": "lib/index.js",
   "scripts": {

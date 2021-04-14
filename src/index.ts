@@ -6,6 +6,12 @@ import { getReasonPhrase } from 'http-status-codes'
 
 type ErrorHandler = (error: Error, req: FastifyRequest, res: FastifyReply) => Promise<void>
 
+export interface FastifyTxStateOptions extends Partial<FastifyServerOptions> {
+  https?: http2.SecureServerOptions
+  validOriginHosts?: string[]
+  skipOriginCheck?: boolean
+}
+
 export default class Server {
   protected https = false
   protected errorHandlers: ErrorHandler[] = []
@@ -15,12 +21,9 @@ export default class Server {
   protected validOriginHosts: Record<string, boolean> = {}
   public app: FastifyInstance
 
-  constructor (config: Partial<FastifyServerOptions & {
-    http2: true
-    https: http2.SecureServerOptions
-    validOriginHosts: string[]
-    skipOriginCheck: boolean
-  }> = {}) {
+  constructor (config: FastifyTxStateOptions & {
+    http2?: true
+  } = {}) {
     try {
       const key = fs.readFileSync('/securekeys/private.key')
       const cert = fs.readFileSync('/securekeys/cert.pem')
