@@ -26,7 +26,7 @@ async function expectErrorCode (client: AxiosInstance, path: string, code: numbe
   try {
     await client.get(path)
     expect(true).to.be.false
-  } catch (e) {
+  } catch (e: any) {
     expect(e.response.status).to.equal(code)
     return e.response.data
   }
@@ -101,7 +101,7 @@ describe('origin filtering', () => {
     try {
       await client.get('/test', { headers: { origin: 'http://fastify-fake' } })
       expect.fail('Should have gotten a 403.')
-    } catch (e) {
+    } catch (e: any) {
       expect(e.response.statusCode === 403)
     }
   })
