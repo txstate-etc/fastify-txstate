@@ -63,6 +63,10 @@ export default class Server {
       resp.removeHeader('X-Powered-By')
     })
     // eslint-disable-next-line @typescript-eslint/no-misused-promises
+    this.app.setNotFoundHandler(async (req, res) => {
+      await res.status(404).send('Not Found.')
+    })
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises
     this.app.setErrorHandler(async (err, req, res) => {
       req.log.warn(err)
       for (const errorHandler of this.errorHandlers) {

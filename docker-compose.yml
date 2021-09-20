@@ -10,6 +10,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.http
+    ports:
+      - 80:80
     logging:
       driver: none
   fastify-https:

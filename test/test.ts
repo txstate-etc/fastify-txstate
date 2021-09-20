@@ -40,6 +40,11 @@ describe('basic tests', () => {
   it('should return a 403 by throwing an error', async () => {
     await expectErrorCode(client, '/403', 403)
   })
+  it('should return a plain non-JSON 404 for any uncaught route', async () => {
+    const message = await expectErrorCode(client, '/doesntexist', 404)
+    expect(message).to.be.a.string
+    expect(message).to.not.include('{')
+  })
   it('should return 500 for any uncaught exception', async () => {
     await expectErrorCode(client, '/500', 500)
   })
