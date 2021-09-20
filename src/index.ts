@@ -53,7 +53,7 @@ export default class Server {
       this.app.addHook('preHandler', async (req, res) => {
         if (!req.headers.origin) return
         const parsedOrigin = new URL(req.headers.origin)
-        if (req.hostname !== parsedOrigin.hostname && !this.validOriginHosts[parsedOrigin.hostname]) {
+        if (req.hostname.replace(/:\d+$/, '') !== parsedOrigin.hostname && !this.validOriginHosts[parsedOrigin.hostname]) {
           await res.status(403).send('Origin check failed. Suspected XSRF attack.')
           return res
         }
