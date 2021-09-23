@@ -77,6 +77,8 @@ export default class Server {
           await res.status(err.statusCode).send(err.errors)
         } else if (err instanceof HttpError) {
           await res.status(err.statusCode).send(err.message)
+        } else if (err.statusCode) {
+          await res.status(err.statusCode).send(new HttpError(err.statusCode).message)
         } else {
           await res.status(500).send('Internal Server Error.')
         }
