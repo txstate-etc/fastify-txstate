@@ -101,16 +101,16 @@ export default class Server {
   public async start (port?: number) {
     const customPort = port ?? parseInt(process.env.PORT ?? '0')
     if (customPort) {
-      await this.app.listen(customPort, '::')
+      await this.app.listen(customPort, '0.0.0.0')
     } else if (this.https) {
       // redirect 80 to 443
       http.createServer((req, res) => {
         res.writeHead(301, { Location: 'https://' + (req?.headers?.host?.replace(/:\d+$/, '') ?? '') + (req.url ?? '') })
         res.end()
       }).listen(80)
-      await this.app.listen(443, '::')
+      await this.app.listen(443, '0.0.0.0')
     } else {
-      await this.app.listen(80, '::')
+      await this.app.listen(80, '0.0.0.0')
     }
   }
 
