@@ -93,14 +93,17 @@ describe('origin filtering', () => {
   it('should allow requests from the same origin subdomain', async () => {
     const resp = await client.get('/test', { headers: { origin: 'http://fastify-http' } })
     expect(resp.data.hello).to.equal('world')
+    expect(resp.headers['access-control-allow-origin']).to.equal('http://fastify-http')
   })
   it('should allow requests when port is redundantly specified', async () => {
     const resp = await client.get('/test', { headers: { origin: 'http://fastify-http:80' } })
     expect(resp.data.hello).to.equal('world')
+    expect(resp.headers['access-control-allow-origin']).to.equal('http://fastify-http:80')
   })
   it('should allow requests with a different origin port', async () => {
     const resp = await client.get('/test', { headers: { origin: 'http://fastify-http:3000' } })
     expect(resp.data.hello).to.equal('world')
+    expect(resp.headers['access-control-allow-origin']).to.equal('http://fastify-http:3000')
   })
   it('should disallow requests from a different origin subdomain', async () => {
     try {
