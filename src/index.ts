@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-floating-promises */
 import { FastifyInstance, FastifyRequest, FastifyReply, FastifyServerOptions, fastify } from 'fastify'
 import fs from 'fs'
 import http from 'http'
@@ -57,8 +58,8 @@ export default class Server {
           await res.status(403).send('Origin check failed. Suspected XSRF attack.')
           return res
         }
-        // eslint-disable-next-line @typescript-eslint/no-floating-promises
         res.header('Access-Control-Allow-Origin', req.headers.origin)
+        res.header('Access-Control-Allow-Headers', req.headers['access-control-request-headers'])
       })
       this.app.options('*', async (req, res) => {
         await res.send()

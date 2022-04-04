@@ -114,8 +114,9 @@ describe('origin filtering', () => {
     }
   })
   it('should respond to preflight requests', async () => {
-    const resp = await client.options('/test', { headers: { origin: 'http://fastify-http:3000' } })
+    const resp = await client.options('/test', { headers: { origin: 'http://fastify-http:3000', 'access-control-request-headers': 'authorization' } })
     expect(resp.status).to.equal(200)
     expect(resp.headers['access-control-allow-origin']).to.equal('http://fastify-http:3000')
+    expect(resp.headers['access-control-allow-headers']).to.equal('authorization')
   })
 })
