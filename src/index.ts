@@ -60,6 +60,9 @@ export default class Server {
         // eslint-disable-next-line @typescript-eslint/no-floating-promises
         res.header('Access-Control-Allow-Origin', req.headers.origin)
       })
+      this.app.options('*', async (req, res) => {
+        await res.send()
+      })
     }
     this.app.addHook('onSend', async (req, resp, payload) => {
       resp.removeHeader('X-Powered-By')

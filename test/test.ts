@@ -110,7 +110,12 @@ describe('origin filtering', () => {
       await client.get('/test', { headers: { origin: 'http://fastify-fake' } })
       expect.fail('Should have gotten a 403.')
     } catch (e: any) {
-      expect(e.response.statusCode === 403)
+      expect(e.response.status).to.equal(403)
     }
+  })
+  it('should respond to preflight requests', async () => {
+    const resp = await client.options('/test', { headers: { origin: 'http://fastify-http:3000' } })
+    expect(resp.status).to.equal(200)
+    expect(resp.headers['access-control-allow-origin']).to.equal('http://fastify-http:3000')
   })
 })
