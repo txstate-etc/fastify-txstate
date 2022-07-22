@@ -71,6 +71,10 @@ describe('basic tests', () => {
     const resp = await client.get('/protocol', { headers: { 'X-Forwarded-Proto': 'https' } })
     expect(resp.data.protocol).to.equal('https')
   })
+  it('should not set the strict transport security header', async () => {
+    const resp = await client.get('/test')
+    expect(resp.headers['strict-transport-security']).to.be.undefined
+  })
 })
 
 describe('https tests', () => {
@@ -86,6 +90,10 @@ describe('https tests', () => {
   it('should return the correct protocol', async () => {
     const resp = await httpsClient.get('/protocol')
     expect(resp.data.protocol).to.equal('https')
+  })
+  it('should set the strict transport security header', async () => {
+    const resp = await httpsClient.get('/test')
+    expect(resp.headers['strict-transport-security']).not.to.be.undefined
   })
 })
 
