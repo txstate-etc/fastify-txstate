@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-floating-promises */
 import { FastifyInstance, FastifyRequest, FastifyReply, FastifyServerOptions, fastify } from 'fastify'
 import fs from 'fs'
 import http from 'http'
@@ -58,21 +57,22 @@ export default class Server {
           await res.status(403).send('Origin check failed. Suspected XSRF attack.')
           return res
         }
-        res.header('Access-Control-Allow-Origin', req.headers.origin)
-        if (req.headers['access-control-request-headers']) res.header('Access-Control-Allow-Headers', req.headers['access-control-request-headers'])
+        void res.header('Access-Control-Allow-Origin', req.headers.origin)
+        if (req.headers['access-control-request-headers']) void res.header('Access-Control-Allow-Headers', req.headers['access-control-request-headers'])
       })
       this.app.options('*', async (req, res) => {
         await res.send()
       })
     }
-    this.app.addHook('onSend', async (req, resp, payload) => {
-      resp.removeHeader('X-Powered-By')
-    })
-    // eslint-disable-next-line @typescript-eslint/no-misused-promises
-    this.app.setNotFoundHandler(async (req, res) => {
-      await res.status(404).send('Not Found.')
-    })
-    // eslint-disable-next-line @typescript-eslint/no-misused-promises
+    this.app.addHook('onSend', this.https && process.env.NODE_ENV !== 'development'
+      ? async (_, resp) => {
+        resp.removeHeader('X-Powered-By')
+        void resp.header('Strict-Transport-Security', 'max-age=31536000')
+      }
+      : async (_, resp) => {
+        resp.removeHeader('X-Powered-By')
+      })
+    this.app.setNotFoundHandler((req, res) => { void res.status(404).send('Not Found.') })
     this.app.setErrorHandler(async (err, req, res) => {
       req.log.warn(err)
       for (const errorHandler of this.errorHandlers) {
