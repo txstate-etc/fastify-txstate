@@ -1,16 +1,16 @@
 {
   "name": "fastify-txstate",
-  "version": "3.0.3",
+  "version": "3.0.4",
   "description": "A small wrapper for fastify providing a set of common conventions & utility functions we use.",
   "exports": {
+    "types": "./lib-esm/index.d.ts",
     "require": "./lib/index.js",
-    "import": "./lib-esm/index.js",
-    "types": "./lib/index.d.ts"
+    "import": "./lib-esm/index.js"
   },
-  "types": "./lib/index.d.ts",
+  "types": "./lib-esm/index.d.ts",
   "scripts": {
     "prepublishOnly": "npm run build",
-    "build": "rm -rf lib && tsc",
+    "build": "rm -rf lib && tsc && mv lib/index.d.ts lib-esm/index.d.ts",
     "test": "./test.sh",
     "mocha": "TS_NODE_PROJECT=test/tsconfig.json mocha -r ts-node/register test/**/*.ts",
     "testserver": "ts-node-script testserver/index.ts"
