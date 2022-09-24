@@ -18,8 +18,16 @@ const redirClient = axios.create({
   httpsAgent: new https.Agent({ rejectUnauthorized: false })
 })
 
-before(async () => {
-  await new Promise(resolve => setTimeout(resolve, 1000))
+before(async function () {
+  this.timeout(5000)
+  for (let i = 0; i < 30; i++) {
+    try {
+      const resp = await client.get('/health')
+      if (resp.status === 200) break
+    } catch (e: any) {
+      await new Promise(resolve => setTimeout(resolve, 200))
+    }
+  }
 })
 
 async function expectErrorCode (client: AxiosInstance, path: string, code: number) {
@@ -64,12 +72,16 @@ describe('basic tests', () => {
     expect(resp.data.hello).to.equal('world')
   })
   it('should return the correct protocol', async () => {
-    const resp = await client.get('/protocol')
+    const resp = await client.get('/proxy')
     expect(resp.data.protocol).to.equal('http')
   })
   it('should return the correct protocol when proxying', async () => {
-    const resp = await client.get('/protocol', { headers: { 'X-Forwarded-Proto': 'https' } })
+    const resp = await client.get('/proxy', { headers: { 'X-Forwarded-Proto': 'https' } })
     expect(resp.data.protocol).to.equal('https')
+  })
+  it('should return the correct hostname when proxying', async () => {
+    const resp = await client.get('/proxy', { headers: { Host: 'www.proxiedhost.com:3000' } })
+    expect(resp.data.hostname).to.equal('www.proxiedhost.com:3000')
   })
   it('should not set the strict transport security header', async () => {
     const resp = await client.get('/test')
@@ -88,7 +100,7 @@ describe('https tests', () => {
     expect(resp.data.hello).to.equal('world')
   })
   it('should return the correct protocol', async () => {
-    const resp = await httpsClient.get('/protocol')
+    const resp = await httpsClient.get('/proxy')
     expect(resp.data.protocol).to.equal('https')
   })
   it('should set the strict transport security header', async () => {
@@ -113,9 +125,42 @@ describe('origin filtering', () => {
     expect(resp.data.hello).to.equal('world')
     expect(resp.headers['access-control-allow-origin']).to.equal('http://fastify-http:3000')
   })
+  it('should allow alternate origins when server sets them in validOriginSuffixes', async () => {
+    const resp = await client.get('/test', { headers: { origin: 'http://www.proxiedhost.com' } })
+    expect(resp.data.hello).to.equal('world')
+    expect(resp.headers['access-control-allow-origin']).to.equal('http://www.proxiedhost.com')
+  })
+  it('should allow smaller alternate origins when server sets them in validOriginSuffixes', async () => {
+    const resp = await client.get('/test', { headers: { origin: 'http://proxiedhost.com' } })
+    expect(resp.data.hello).to.equal('world')
+    expect(resp.headers['access-control-allow-origin']).to.equal('http://proxiedhost.com')
+  })
+  it('should allow alternate origins when server sets them in validOrigins', async () => {
+    const resp = await client.get('/test', { headers: { origin: 'http://www.proxiedhost.com' } })
+    expect(resp.data.hello).to.equal('world')
+    expect(resp.headers['access-control-allow-origin']).to.equal('http://www.proxiedhost.com')
+  })
+  it('should allow alternate origins when server sets them in validOriginHosts', async () => {
+    const resp = await client.get('/test', { headers: { origin: 'http://subd.validhost.com' } })
+    expect(resp.data.hello).to.equal('world')
+    expect(resp.headers['access-control-allow-origin']).to.equal('http://subd.validhost.com')
+  })
+  it('should allow alternate origins when server provides a checkOrigin function', async () => {
+    const resp = await client.get('/test', { headers: { origin: 'http://www.someothervalidhost.com', 'x-auto-cors-pass': 1 } })
+    expect(resp.data.hello).to.equal('world')
+    expect(resp.headers['access-control-allow-origin']).to.equal('http://www.someothervalidhost.com')
+  })
   it('should disallow requests from a different origin subdomain', async () => {
     try {
       await client.get('/test', { headers: { origin: 'http://fastify-fake' } })
+      expect.fail('Should have gotten a 403.')
+    } catch (e: any) {
+      expect(e.response.status).to.equal(403)
+    }
+  })
+  it('should disallow requests from an origin with a different subdomain than declared in validOriginHosts', async () => {
+    try {
+      await client.get('/test', { headers: { origin: 'http://validhost.com' } })
       expect.fail('Should have gotten a 403.')
     } catch (e: any) {
       expect(e.response.status).to.equal(403)

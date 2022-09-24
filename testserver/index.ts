@@ -2,7 +2,13 @@ import Server, { HttpError } from '../src'
 
 class CustomError extends Error {}
 
-const server = new Server({ trustProxy: true })
+const server = new Server({
+  trustProxy: true,
+  validOrigins: ['http://validorgin.com'],
+  validOriginHosts: ['subd.validhost.com'],
+  validOriginSuffixes: ['proxiedhost.com'],
+  checkOrigin: req => req.headers['x-auto-cors-pass'] === '1'
+})
 server.app.get('/test', async (req, res) => {
   return { hello: 'world' }
 })
@@ -22,8 +28,8 @@ server.app.get('/shutdown', async (req, res) => {
   await res.send('OK')
   await server.close(5000)
 })
-server.app.get('/protocol', async (req, res) => {
-  return { protocol: req.protocol }
+server.app.get('/proxy', async (req, res) => {
+  return { protocol: req.protocol, hostname: req.hostname }
 })
 server.addErrorHandler(async (err, req, res) => {
   if (err instanceof CustomError) await res.status(422).send('My Custom Error')

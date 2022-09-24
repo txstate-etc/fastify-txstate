@@ -8,8 +8,11 @@ type ErrorHandler = (error: Error, req: FastifyRequest, res: FastifyReply) => Pr
 
 export interface FastifyTxStateOptions extends Partial<FastifyServerOptions> {
   https?: http2.SecureServerOptions
+  validOrigins?: string[]
   validOriginHosts?: string[]
+  validOriginSuffixes?: string[]
   skipOriginCheck?: boolean
+  checkOrigin?: (req: FastifyRequest) => boolean
 }
 
 export default class Server {
@@ -18,7 +21,9 @@ export default class Server {
   protected healthMessage?: string
   protected shuttingDown = false
   protected sigHandler: (signal: any) => void
+  protected validOrigins: Record<string, boolean> = {}
   protected validOriginHosts: Record<string, boolean> = {}
+  protected validOriginSuffixes = new Set<string>()
   public app: FastifyInstance
 
   constructor (config: FastifyTxStateOptions & {
@@ -49,16 +54,34 @@ export default class Server {
     if (process.env.TRUST_PROXY) config.trustProxy = true
     this.app = fastify(config)
     if (!config.skipOriginCheck && !process.env.SKIP_ORIGIN_CHECK) {
+      this.setValidOrigins([...(config.validOrigins ?? []), ...(process.env.VALID_ORIGINS?.split(',') ?? [])])
       this.setValidOriginHosts([...(config.validOriginHosts ?? []), ...(process.env.VALID_ORIGIN_HOSTS?.split(',') ?? [])])
+      this.setValidOriginSuffixes([...(config.validOriginSuffixes ?? []), ...(process.env.VALID_ORIGIN_SUFFIXES?.split(',') ?? [])])
       this.app.addHook('preHandler', async (req, res) => {
         if (!req.headers.origin) return
-        const parsedOrigin = new URL(req.headers.origin)
-        if (req.hostname.replace(/:\d+$/, '') !== parsedOrigin.hostname && !this.validOriginHosts[parsedOrigin.hostname]) {
+        let passed = this.validOrigins[req.headers.origin]
+        if (!passed) {
+          const parsedOrigin = new URL(req.headers.origin)
+          if (req.hostname.replace(/:\d+$/, '') === parsedOrigin.hostname) passed = true
+          if (this.validOriginHosts[parsedOrigin.hostname]) passed = true
+
+          if (!passed && this.validOriginSuffixes.size > 0) {
+            const originParts = parsedOrigin.hostname.split('.')
+            for (let i = 0; i < originParts.length; i++) {
+              const suffix = originParts.slice(i).join('.')
+              if (this.validOriginSuffixes.has(suffix)) passed = true
+            }
+          }
+          if (!passed && config.checkOrigin?.(req)) passed = true
+        }
+        if (!passed) {
           await res.status(403).send('Origin check failed. Suspected XSRF attack.')
           return res
+        } else {
+          void res.header('Access-Control-Allow-Origin', req.headers.origin)
+          void res.header('Access-Control-Max-Age', '600') // ask browser to skip pre-flights for 10 minutes after a yes
+          if (req.headers['access-control-request-headers']) void res.header('Access-Control-Allow-Headers', req.headers['access-control-request-headers'])
         }
-        void res.header('Access-Control-Allow-Origin', req.headers.origin)
-        if (req.headers['access-control-request-headers']) void res.header('Access-Control-Allow-Headers', req.headers['access-control-request-headers'])
       })
       this.app.options('*', async (req, res) => {
         await res.send()
@@ -132,8 +155,17 @@ export default class Server {
     this.healthMessage = undefined
   }
 
+  public setValidOrigins (origins: string[]) {
+    this.validOrigins = origins.reduce((validOrigins: Record<string, boolean>, origin) => ({ ...validOrigins, [origin]: true }), {})
+  }
+
   public setValidOriginHosts (hosts: string[]) {
-    this.validOriginHosts = hosts.reduce((validOrigins: Record<string, boolean>, origin) => ({ ...validOrigins, [origin]: true }), {})
+    this.validOriginHosts = hosts.reduce((validHosts: Record<string, boolean>, host) => ({ ...validHosts, [host]: true }), {})
+  }
+
+  public setValidOriginSuffixes (suffixes: string[]) {
+    this.validOriginSuffixes.clear()
+    for (const s of suffixes) this.validOriginSuffixes.add(s)
   }
 
   public async close (softSeconds?: number) {
