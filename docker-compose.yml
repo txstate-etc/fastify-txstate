@@ -10,11 +10,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.http
-    logging:
-      driver: none
+    environment:
+      NODE_ENV: development
   fastify-https:
     build:
       context: .
       dockerfile: Dockerfile.https
-    logging:
-      driver: none

@@ -17,7 +17,7 @@ export interface FastifyTxStateOptions extends Partial<FastifyServerOptions> {
 
 export const devLogger = {
   level: 'info',
-  info: console.info,
+  info: (msg: any) => console.info(msg.req ? `${msg.req.method} ${msg.req.url}` : msg.res ? `${msg.res.statusCode}` : msg),
   error: console.error,
   debug: console.debug,
   fatal: console.error,
