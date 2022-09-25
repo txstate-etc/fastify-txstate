@@ -15,6 +15,18 @@ export interface FastifyTxStateOptions extends Partial<FastifyServerOptions> {
   checkOrigin?: (req: FastifyRequest) => boolean
 }
 
+export const devLogger = {
+  level: 'info',
+  info: console.info,
+  error: console.error,
+  debug: console.debug,
+  fatal: console.error,
+  warn: console.warn,
+  trace: console.trace,
+  silent: (msg: any) => {},
+  child (bindings: any, options?: any) { return devLogger }
+}
+
 export default class Server {
   protected https = false
   protected errorHandlers: ErrorHandler[] = []
@@ -46,10 +58,9 @@ export default class Server {
       delete config.https
     }
     if (typeof config.logger === 'undefined') {
-      config.logger = {
-        level: 'info',
-        prettyPrint: process.env.NODE_ENV === 'development'
-      }
+      config.logger = process.env.NODE_ENV === 'development'
+        ? devLogger
+        : { level: 'info' }
     }
     if (process.env.TRUST_PROXY) config.trustProxy = true
     this.app = fastify(config)
