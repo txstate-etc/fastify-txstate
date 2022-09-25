@@ -71,7 +71,8 @@ export default class Server {
       this.app.addHook('preHandler', async (req, res) => {
         if (!req.headers.origin) return
         let passed = this.validOrigins[req.headers.origin]
-        if (!passed) {
+        if (!passed && req.headers.origin === 'null') passed = process.env.NODE_ENV === 'development'
+        else if (!passed) {
           const parsedOrigin = new URL(req.headers.origin)
           if (req.hostname.replace(/:\d+$/, '') === parsedOrigin.hostname) passed = true
           if (this.validOriginHosts[parsedOrigin.hostname]) passed = true
