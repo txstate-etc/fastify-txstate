@@ -128,10 +128,14 @@ export default class Server {
         }
       }
     })
-    this.app.get('/health', async (req, res) => {
-      if (this.shuttingDown) await res.status(503).send('Service is shutting down/restarting.')
-      else if (this.healthMessage) await res.status(500).send(this.healthMessage)
-      else await res.status(200).send('OK')
+    this.app.get('/health', { logLevel: 'trace' }, async (req, res) => {
+      if (this.shuttingDown) {
+        res.log.info('Returning 503 on /health because we are shutting down/restarting.')
+        await res.status(503).send('Service is shutting down/restarting.')
+      } else if (this.healthMessage) {
+        res.log.info('Returning 500 on health with the message:', this.healthMessage)
+        await res.status(500).send(this.healthMessage)
+      } else await res.status(200).send('OK')
     })
     this.sigHandler = () => {
       this.close().then(() => {
