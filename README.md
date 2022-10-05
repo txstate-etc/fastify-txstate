@@ -80,4 +80,13 @@ You can authorize more subdomains with the `validOriginHosts` configuration opti
 You can disable these origin checks entirely with the `skipOriginCheck` configuration or `SKIP_ORIGIN_CHECK` environment variable.
 
 # Reverse Proxy
-If your application is behind a reverse proxy, you'll want to set the `trustProxy` configuration to true so that variables like `request.protocol` get set correctly. You can also set the `TRUST_PROXY` environment variable.
+If your application is behind a reverse proxy, you'll want to set the `trustProxy` configuration to true so that variables like `request.protocol` get set correctly. You can also set the `TRUST_PROXY` environment variable. `true` or `1` will translate to `{ trustProxy: true }`; anything else will be passed unchanged as a string.
+
+# Logging
+We try to set up logging well by default, including things like the HTTP traceparent header, and putting the url in both the incoming and outgoing access log entries so that it's easy to grep for certain routes/params.
+
+Development and production logs are different, based on the `NODE_ENV` environment variable. The development logger is designed to be extremely brief and not in JSON format, so that you can see errors clearly.
+
+If you want to manipulate the logging you can import the `devLogger` and `prodLogger` into your project, manipulate them, and pass them into the server constructor configuration.
+
+You can also simply add information to the `reply.extraLogInfo` object and it will automatically appear in the outgoing access log in production.

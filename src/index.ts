@@ -1,4 +1,4 @@
-import { FastifyInstance, FastifyRequest, FastifyReply, FastifyServerOptions, fastify } from 'fastify'
+import { FastifyInstance, FastifyRequest, FastifyReply, FastifyServerOptions, fastify, FastifyLoggerOptions } from 'fastify'
 import fs from 'fs'
 import http from 'http'
 import http2 from 'http2'
@@ -15,9 +15,15 @@ export interface FastifyTxStateOptions extends Partial<FastifyServerOptions> {
   checkOrigin?: (req: FastifyRequest) => boolean
 }
 
+declare module 'fastify' {
+  interface FastifyReply {
+    extraLogInfo: any
+  }
+}
+
 export const devLogger = {
   level: 'info',
-  info: (msg: any) => console.info(msg.req ? `${msg.req.method} ${msg.req.url}` : msg.res ? `${msg.res.statusCode}` : msg),
+  info: (msg: any) => console.info(msg.req ? `${msg.req.method} ${msg.req.url}` : msg.res ? `${msg.res.statusCode} - ${msg.responseTime}` : msg),
   error: console.error,
   debug: console.debug,
   fatal: console.error,
@@ -25,6 +31,27 @@ export const devLogger = {
   trace: console.trace,
   silent: (msg: any) => {},
   child (bindings: any, options?: any) { return devLogger }
+}
+
+export const prodLogger: FastifyLoggerOptions = {
+  level: 'info',
+  serializers: {
+    req (req) {
+      return {
+        method: req.method,
+        url: req.url,
+        remoteAddress: req.ip,
+        traceparent: req.headers.traceparent
+      }
+    },
+    res (res) {
+      return {
+        statusCode: res.statusCode,
+        url: res.request.url,
+        ...res.extraLogInfo
+      }
+    }
+  }
 }
 
 export default class Server {
@@ -60,7 +87,7 @@ export default class Server {
     if (typeof config.logger === 'undefined') {
       config.logger = process.env.NODE_ENV === 'development'
         ? devLogger
-        : { level: 'info' }
+        : prodLogger
     }
     if (process.env.TRUST_PROXY != null) {
       if (['true', '1'].includes(process.env.TRUST_PROXY)) config.trustProxy = true
@@ -72,6 +99,7 @@ export default class Server {
       this.setValidOriginHosts([...(config.validOriginHosts ?? []), ...(process.env.VALID_ORIGIN_HOSTS?.split(',') ?? [])])
       this.setValidOriginSuffixes([...(config.validOriginSuffixes ?? []), ...(process.env.VALID_ORIGIN_SUFFIXES?.split(',') ?? [])])
       this.app.addHook('preHandler', async (req, res) => {
+        (res as any).extraLogInfo = {}
         if (!req.headers.origin) return
         let passed = this.validOrigins[req.headers.origin]
         if (!passed && req.headers.origin === 'null') passed = process.env.NODE_ENV === 'development'
