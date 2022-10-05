@@ -62,7 +62,10 @@ export default class Server {
         ? devLogger
         : { level: 'info' }
     }
-    if (process.env.TRUST_PROXY) config.trustProxy = true
+    if (process.env.TRUST_PROXY != null) {
+      if (['true', '1'].includes(process.env.TRUST_PROXY)) config.trustProxy = true
+      else config.trustProxy = process.env.TRUST_PROXY
+    }
     this.app = fastify(config)
     if (!config.skipOriginCheck && !process.env.SKIP_ORIGIN_CHECK) {
       this.setValidOrigins([...(config.validOrigins ?? []), ...(process.env.VALID_ORIGINS?.split(',') ?? [])])
