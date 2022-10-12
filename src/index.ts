@@ -156,7 +156,7 @@ export default class Server {
         }
       }
     })
-    this.app.get('/health', { logLevel: 'trace' }, async (req, res) => {
+    this.app.get('/health', { logLevel: 'warn' }, async (req, res) => {
       if (this.shuttingDown) {
         res.log.info('Returning 503 on /health because we are shutting down/restarting.')
         await res.status(503).send('Service is shutting down/restarting.')

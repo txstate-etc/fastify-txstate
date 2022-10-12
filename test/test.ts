@@ -173,3 +173,14 @@ describe('origin filtering', () => {
     expect(resp.headers['access-control-allow-headers']).to.equal('authorization')
   })
 })
+
+describe('logging test', () => {
+  it('should not log health checks', async () => {
+    const resp = await httpsClient.get('/health')
+    expect(resp.status).to.equal(200)
+  })
+  it('should log extra info when given', async () => {
+    const resp = await httpsClient.get('/logging')
+    expect(resp.data.success).to.be.true
+  })
+})

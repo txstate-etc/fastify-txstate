@@ -31,6 +31,10 @@ server.app.get('/shutdown', async (req, res) => {
 server.app.get('/proxy', async (req, res) => {
   return { protocol: req.protocol, hostname: req.hostname }
 })
+server.app.get('/logging', async (req, res) => {
+  res.extraLogInfo = { hello: 'world' }
+  return { success: true }
+})
 server.addErrorHandler(async (err, req, res) => {
   if (err instanceof CustomError) await res.status(422).send('My Custom Error')
 })
