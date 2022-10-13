@@ -30,7 +30,7 @@ export const devLogger = {
   warn: console.warn,
   trace: console.trace,
   silent: (msg: any) => {},
-  child (bindings: any, options?: any) { return devLogger }
+  child (bindings: any, options?: any) { return this }
 }
 
 export const prodLogger: FastifyLoggerOptions = {
