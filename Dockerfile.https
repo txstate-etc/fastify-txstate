@@ -1,6 +1,6 @@
 FROM txstatemws/keygenerator as keygen
 
-FROM node:14-alpine
+FROM node:18-alpine
 WORKDIR /usr/app
 
 COPY package.json ./

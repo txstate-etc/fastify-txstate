@@ -47,7 +47,7 @@ export const prodLogger: FastifyLoggerOptions = {
     res (res) {
       return {
         statusCode: res.statusCode,
-        url: res.request.url,
+        url: res.request?.url,
         ...res.extraLogInfo
       }
     }
