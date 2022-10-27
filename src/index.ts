@@ -134,9 +134,11 @@ export default class Server {
       ? async (_, resp) => {
         resp.removeHeader('X-Powered-By')
         void resp.header('Strict-Transport-Security', 'max-age=31536000')
+        if (resp.getHeader('content-type') === 'text/html') void resp.type('text/html; charset=utf-8')
       }
       : async (_, resp) => {
         resp.removeHeader('X-Powered-By')
+        if (resp.getHeader('content-type') === 'text/html') void resp.type('text/html; charset=utf-8')
       })
     this.app.setNotFoundHandler((req, res) => { void res.status(404).send('Not Found.') })
     this.app.setErrorHandler(async (err, req, res) => {

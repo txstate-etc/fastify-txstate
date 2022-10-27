@@ -1,6 +1,6 @@
 {
   "name": "fastify-txstate",
-  "version": "3.0.13",
+  "version": "3.1.0",
   "description": "A small wrapper for fastify providing a set of common conventions & utility functions we use.",
   "exports": {
     "types": "./lib-esm/index.d.ts",
@@ -16,7 +16,7 @@
     "testserver": "ts-node-script testserver/index.ts"
   },
   "dependencies": {
-    "fastify": "^4.5.3",
+    "fastify": "^4.9.2",
     "http-status-codes": "^2.1.4"
   },
   "devDependencies": {
