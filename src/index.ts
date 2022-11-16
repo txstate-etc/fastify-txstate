@@ -103,7 +103,7 @@ export default class Server {
         if (!req.headers.origin) return
         let passed = this.validOrigins[req.headers.origin]
         if (!passed && req.headers.origin === 'null') passed = process.env.NODE_ENV === 'development'
-        else if (!passed) {
+        if (!passed) {
           const parsedOrigin = new URL(req.headers.origin)
           if (req.hostname.replace(/:\d+$/, '') === parsedOrigin.hostname) passed = true
           if (this.validOriginHosts[parsedOrigin.hostname]) passed = true
