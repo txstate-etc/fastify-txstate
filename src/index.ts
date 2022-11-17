@@ -103,7 +103,7 @@ export default class Server {
         if (!req.headers.origin) return
         let passed = this.validOrigins[req.headers.origin]
         if (!passed && req.headers.origin === 'null') passed = process.env.NODE_ENV === 'development'
-        if (!passed) {
+        else if (!passed) {
           const parsedOrigin = new URL(req.headers.origin)
           if (req.hostname.replace(/:\d+$/, '') === parsedOrigin.hostname) passed = true
           if (this.validOriginHosts[parsedOrigin.hostname]) passed = true
@@ -115,8 +115,8 @@ export default class Server {
               if (this.validOriginSuffixes.has(suffix)) passed = true
             }
           }
-          if (!passed && config.checkOrigin?.(req)) passed = true
         }
+        if (!passed && config.checkOrigin?.(req)) passed = true
         if (!passed) {
           await res.status(403).send('Origin check failed. Suspected XSRF attack.')
           return res
