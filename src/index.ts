@@ -1,7 +1,7 @@
-import { FastifyInstance, FastifyRequest, FastifyReply, FastifyServerOptions, fastify, FastifyLoggerOptions } from 'fastify'
+import { type FastifyInstance, type FastifyRequest, type FastifyReply, type FastifyServerOptions, fastify, type FastifyLoggerOptions } from 'fastify'
 import fs from 'fs'
 import http from 'http'
-import http2 from 'http2'
+import type http2 from 'http2'
 import { getReasonPhrase } from 'http-status-codes'
 
 type ErrorHandler = (error: Error, req: FastifyRequest, res: FastifyReply) => Promise<void>
@@ -23,7 +23,7 @@ declare module 'fastify' {
 
 export const devLogger = {
   level: 'info',
-  info: (msg: any) => console.info(msg.req ? `${msg.req.method} ${msg.req.url}` : msg.res ? `${msg.res.statusCode} - ${msg.responseTime}` : msg),
+  info: (msg: any) => { console.info(msg.req ? `${msg.req.method} ${msg.req.url}` : msg.res ? `${msg.res.statusCode} - ${msg.responseTime}` : msg) },
   error: console.error,
   debug: console.debug,
   fatal: console.error,
@@ -171,7 +171,7 @@ export default class Server {
     this.sigHandler = () => {
       this.close().then(() => {
         process.exit()
-      }).catch(e => console.error(e))
+      }).catch(e => { console.error(e) })
     }
     process.on('SIGTERM', this.sigHandler)
     process.on('SIGINT', this.sigHandler)
@@ -243,7 +243,7 @@ export class HttpError extends Error {
   }
 }
 
-interface ValidationErrors { [keys: string]: string[] }
+type ValidationErrors = Record<string, string[]>
 export class FailedValidationError extends HttpError {
   public errors: ValidationErrors
   constructor (errors: ValidationErrors) {

@@ -38,4 +38,4 @@ server.app.get('/logging', async (req, res) => {
 server.addErrorHandler(async (err, req, res) => {
   if (err instanceof CustomError) await res.status(422).send('My Custom Error')
 })
-server.start().catch(e => console.error(e))
+server.start().catch(e => { console.error(e) })
