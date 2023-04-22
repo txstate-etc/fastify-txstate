@@ -39,7 +39,7 @@ export const prodLogger: FastifyLoggerOptions = {
     req (req) {
       return {
         method: req.method,
-        url: req.url,
+        url: req.url.replace(/token=[\w.]+/, 'token=redacted'),
         remoteAddress: req.ip,
         traceparent: req.headers.traceparent
       }
@@ -47,7 +47,7 @@ export const prodLogger: FastifyLoggerOptions = {
     res (res) {
       return {
         statusCode: res.statusCode,
-        url: res.request?.url,
+        url: res.request?.url.replace(/token=[\w.]+/, 'token=redacted'),
         length: res.getHeader('content-length'),
         ...res.extraLogInfo
       }
