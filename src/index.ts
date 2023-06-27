@@ -13,6 +13,14 @@ export interface FastifyTxStateOptions extends Partial<FastifyServerOptions> {
   validOriginSuffixes?: string[]
   skipOriginCheck?: boolean
   checkOrigin?: (req: FastifyRequest) => boolean
+  /**
+   * Run an asynchronous function to check the health of the service.
+   *
+   * Return a non-empty error message to trigger unhealthy status.
+   *
+   * Setting a health message with setUnhealthy will override this and prevent it from being executed.
+   */
+  checkHealth?: () => Promise<string | undefined>
 }
 
 declare module 'fastify' {
@@ -48,7 +56,7 @@ export const prodLogger: FastifyLoggerOptions = {
       return {
         statusCode: res.statusCode,
         url: res.request?.url.replace(/token=[\w.]+/, 'token=redacted'),
-        length: res.getHeader('content-length'),
+        length: res.getHeader?.('content-length'),
         ...res.extraLogInfo
       }
     }
@@ -59,6 +67,7 @@ export default class Server {
   protected https = false
   protected errorHandlers: ErrorHandler[] = []
   protected healthMessage?: string
+  protected healthCallback?: () => Promise<string | undefined>
   protected shuttingDown = false
   protected sigHandler: (signal: any) => void
   protected validOrigins: Record<string, boolean> = {}
@@ -94,6 +103,7 @@ export default class Server {
       if (['true', '1'].includes(process.env.TRUST_PROXY)) config.trustProxy = true
       else config.trustProxy = process.env.TRUST_PROXY
     }
+    this.healthCallback = config.checkHealth
     this.app = fastify(config)
     if (!config.skipOriginCheck && !process.env.SKIP_ORIGIN_CHECK) {
       this.setValidOrigins([...(config.validOrigins ?? []), ...(process.env.VALID_ORIGINS?.split(',') ?? [])])
@@ -162,11 +172,21 @@ export default class Server {
     this.app.get('/health', { logLevel: 'warn' }, async (req, res) => {
       if (this.shuttingDown) {
         res.log.info('Returning 503 on /health because we are shutting down/restarting.')
-        await res.status(503).send('Service is shutting down/restarting.')
+        void res.status(503)
+        return 'Service is shutting down/restarting.'
       } else if (this.healthMessage) {
-        res.log.info('Returning 500 on health with the message:', this.healthMessage)
-        await res.status(500).send(this.healthMessage)
-      } else await res.status(200).send('OK')
+        res.log.info(this.healthMessage)
+        void res.status(500)
+        return this.healthMessage
+      } else if (this.healthCallback) {
+        const msg = await this.healthCallback()
+        if (msg) {
+          res.log.info(msg)
+          void res.status(500)
+          return msg
+        }
+      }
+      return 'OK'
     })
     this.sigHandler = () => {
       this.close().then(() => {
