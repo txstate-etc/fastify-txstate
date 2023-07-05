@@ -20,7 +20,7 @@ export interface FastifyTxStateOptions extends Partial<FastifyServerOptions> {
    *
    * Setting a health message with setUnhealthy will override this and prevent it from being executed.
    */
-  checkHealth?: () => Promise<string | undefined>
+  checkHealth?: () => Promise<string | { status?: number, message?: string } | undefined>
 }
 
 declare module 'fastify' {
