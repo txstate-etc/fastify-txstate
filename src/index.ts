@@ -67,7 +67,7 @@ export default class Server {
   protected https = false
   protected errorHandlers: ErrorHandler[] = []
   protected healthMessage?: string
-  protected healthCallback?: () => Promise<string | undefined>
+  protected healthCallback?: () => Promise<string | { status?: number, message?: string } | undefined>
   protected shuttingDown = false
   protected sigHandler: (signal: any) => void
   protected validOrigins: Record<string, boolean> = {}
@@ -143,12 +143,12 @@ export default class Server {
     }
     this.app.addHook('onSend', this.https && process.env.NODE_ENV !== 'development'
       ? async (_, resp) => {
-        resp.removeHeader('X-Powered-By')
+        void resp.removeHeader('X-Powered-By')
         void resp.header('Strict-Transport-Security', 'max-age=31536000')
         if (resp.getHeader('content-type') === 'text/html') void resp.type('text/html; charset=utf-8')
       }
       : async (_, resp) => {
-        resp.removeHeader('X-Powered-By')
+        void resp.removeHeader('X-Powered-By')
         if (resp.getHeader('content-type') === 'text/html') void resp.type('text/html; charset=utf-8')
       })
     this.app.setNotFoundHandler((req, res) => { void res.status(404).send('Not Found.') })
@@ -173,17 +173,18 @@ export default class Server {
       if (this.shuttingDown) {
         res.log.info('Returning 503 on /health because we are shutting down/restarting.')
         void res.status(503)
-        return 'Service is shutting down/restarting.'
+        return 'MAINTENANCE'
       } else if (this.healthMessage) {
         res.log.info(this.healthMessage)
         void res.status(500)
         return this.healthMessage
       } else if (this.healthCallback) {
-        const msg = await this.healthCallback()
-        if (msg) {
-          res.log.info(msg)
-          void res.status(500)
-          return msg
+        const resp = await this.healthCallback()
+        const [status, msg] = typeof resp === 'string' ? [500, resp] : [resp?.status, resp?.message]
+        if (!!msg || !!status) {
+          res.log.info(resp, 'Health check callback failed.')
+          void res.status(status ?? 500)
+          return msg ?? 'FAIL'
         }
       }
       return 'OK'
