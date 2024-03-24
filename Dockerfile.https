@@ -1,6 +1,6 @@
 FROM txstatemws/keygenerator as keygen
 
-FROM node:18-alpine
+FROM node:20-alpine
 WORKDIR /usr/app
 
 COPY package.json ./
@@ -10,5 +10,4 @@ COPY --from=keygen /securekeys /securekeys
 COPY src src
 COPY testserver testserver
 
-ENTRYPOINT [ "npm" ]
-CMD [ "run", "testserver" ]
+CMD [ "node", "-r", "ts-node/register", "--no-warnings", "testserver/index.ts" ]

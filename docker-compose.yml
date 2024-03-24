@@ -3,6 +3,7 @@ services:
   fastify-test:
     build:
       context: .
+      dockerfile: Dockerfile.test
     depends_on:
       - fastify-http
       - fastify-https
@@ -16,3 +17,5 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.https
+    environment:
+      NODE_ENV: production

@@ -1,10 +1,57 @@
-import { type FastifyInstance, type FastifyRequest, type FastifyReply, type FastifyServerOptions, fastify, type FastifyLoggerOptions } from 'fastify'
-import fs from 'fs'
-import http from 'http'
-import type http2 from 'http2'
-import { getReasonPhrase } from 'http-status-codes'
+import swagger, { type FastifyDynamicSwaggerOptions } from '@fastify/swagger'
+import swaggerUI, { type FastifySwaggerUiOptions } from '@fastify/swagger-ui'
+import type { JsonSchemaToTsProvider } from '@fastify/type-provider-json-schema-to-ts'
+import ajvErrors from 'ajv-errors'
+import { type FastifyInstance, type FastifyRequest, type FastifyReply, type FastifyServerOptions, fastify, type FastifyLoggerOptions, type FastifyBaseLogger, type RawServerDefault } from 'fastify'
+import fs from 'node:fs'
+import http from 'node:http'
+import type http2 from 'node:http2'
+import type { OpenAPIV3 } from 'openapi-types'
+import { set, sleep, toArray } from 'txstate-utils'
+import { FailedValidationError, HttpError } from './error'
+import { unifiedAuthenticate } from './unified-auth'
 
 type ErrorHandler = (error: Error, req: FastifyRequest, res: FastifyReply) => Promise<void>
+
+export interface FastifyTxStateAuthInfo {
+  /**
+   * The primary identifier for the user that is making the request, after processing
+   * their session token / JWT.
+   */
+  username: string
+  /**
+   * This should be an identifier for the particular session, so that the same user
+   * on different devices/browsers/tabs can be distinguished from one another.
+   *
+   * It should NOT be usable as a cookie or bearer token, as it will appear in logs. If you
+   * use JSON Web Tokens, an easy thing is to combine the username with the `iat` issued
+   * date to create something unique but not useful to attackers.
+   *
+   * For lookup tokens, you can do the same `${username}-${createdAt}` after looking up
+   * the session in your database.
+   *
+   * If all else fails, you can sha256 the session token with a salt.
+   */
+  sessionId: string
+  /**
+   * Some authentication systems allow administrators to impersonate regular users, so that
+   * they can see what that user sees and troubleshoot issues. We still want to log the administrator
+   * with any actions they take while impersonating someone, for auditing purposes, so you should
+   * fill this field when applicable.
+   *
+   * This will also be available at `req.auth.impersonatedBy`, so it is possible for your API
+   * to implement complicated authorization rules based on whether a user is being impersonated.
+   * It sort of defeats the purpose of impersonation, but used sparingly it could prevent administrators
+   * from making mistakes.
+   */
+  impersonatedBy?: string
+  /**
+   * If your API may be accessed by a different client application, such that the user is actually logged
+   * into that application instead of yours, but you accept that application's session tokens, filling
+   * this field can help log requests that are authenticated with the other application's token.
+   */
+  clientId?: string
+}
 
 export interface FastifyTxStateOptions extends Partial<FastifyServerOptions> {
   https?: http2.SecureServerOptions
@@ -21,9 +68,26 @@ export interface FastifyTxStateOptions extends Partial<FastifyServerOptions> {
    * Setting a health message with setUnhealthy will override this and prevent it from being executed.
    */
   checkHealth?: () => Promise<string | { status?: number, message?: string } | undefined>
+  /**
+   * Run an async function to get authentication information out of the request
+   * object. Should return an object with at least a username and sessionid (see FastifyTxStateAuthInfo
+   * for further detail).
+   *
+   * The return object will be added to the request object as `req.auth` for later
+   * use in your route handlers. It will also be added to the logs in production.
+   *
+   * IMPORTANT: It is not advisable to return excessive amounts of data here, nor anything
+   * particularly sensitive, since it will all be included in every log entry.
+   *
+   * If this function throws, the client will receive a 401 response.
+   */
+  authenticate?: <T extends FastifyTxStateAuthInfo> (req: FastifyRequest) => Promise<T | undefined>
 }
 
 declare module 'fastify' {
+  interface FastifyRequest {
+    auth?: FastifyTxStateAuthInfo
+  }
   interface FastifyReply {
     extraLogInfo: any
   }
@@ -47,7 +111,7 @@ export const prodLogger: FastifyLoggerOptions = {
     req (req) {
       return {
         method: req.method,
-        url: req.url.replace(/token=[\w.]+/, 'token=redacted'),
+        url: req.url.replace(/(token|unifiedJwt)=[\w.]+/i, '$1=redacted'),
         remoteAddress: req.ip,
         traceparent: req.headers.traceparent
       }
@@ -55,9 +119,10 @@ export const prodLogger: FastifyLoggerOptions = {
     res (res) {
       return {
         statusCode: res.statusCode,
-        url: res.request?.url.replace(/token=[\w.]+/, 'token=redacted'),
-        length: res.getHeader?.('content-length'),
-        ...res.extraLogInfo
+        url: res.request?.url.replace(/(token|unifiedJwt)=[\w.]+/i, '$1=redacted'),
+        length: Number(toArray(res.getHeader?.('content-length'))[0]),
+        ...res.extraLogInfo,
+        auth: res.request?.auth ?? res.extraLogInfo.auth
       }
     }
   }
@@ -73,9 +138,9 @@ export default class Server {
   protected validOrigins: Record<string, boolean> = {}
   protected validOriginHosts: Record<string, boolean> = {}
   protected validOriginSuffixes = new Set<string>()
-  public app: FastifyInstance
+  public app: FastifyInstance<RawServerDefault, http.IncomingMessage, http.ServerResponse<http.IncomingMessage>, FastifyBaseLogger, JsonSchemaToTsProvider>
 
-  constructor (config: FastifyTxStateOptions & {
+  constructor (protected config: FastifyTxStateOptions & {
     http2?: true
   } = {}) {
     try {
@@ -103,8 +168,40 @@ export default class Server {
       if (['true', '1'].includes(process.env.TRUST_PROXY)) config.trustProxy = true
       else config.trustProxy = process.env.TRUST_PROXY
     }
+    config.ajv = { ...config.ajv, plugins: [...(config.ajv?.plugins?.filter(p => p !== ajvErrors) ?? []), ajvErrors], customOptions: { ...config.ajv?.customOptions, allErrors: true, strictSchema: false } }
     this.healthCallback = config.checkHealth
     this.app = fastify(config)
+    this.app.addHook('onRoute', route => {
+      if (!route.schema?.body) return
+      const missingResponse = route.schema?.response == null
+      const newSchema = set<any>(route.schema ?? {}, 'response.422', {
+        description: 'Validation failure.',
+        type: 'object',
+        properties: {
+          errors: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                type: { type: 'string', enum: ['error', 'warning', 'success', 'system'], example: 'error' },
+                message: { type: 'string', example: 'must be an integer' },
+                path: { type: 'string', example: 'cart.item.0.quantity', description: 'Dot-separated path to the field in the request body that caused the validation error.' }
+              },
+              required: ['type', 'message'],
+              additionalProperties: false
+            }
+          }
+        }
+      })
+      if (missingResponse) {
+        newSchema.response['200'] = {
+          description: 'Success. Return type has not been specified.',
+          type: 'null'
+        }
+      }
+      route.schema = newSchema
+    })
+
     if (!config.skipOriginCheck && !process.env.SKIP_ORIGIN_CHECK) {
       this.setValidOrigins([...(config.validOrigins ?? []), ...(process.env.VALID_ORIGINS?.split(',') ?? [])])
       this.setValidOriginHosts([...(config.validOriginHosts ?? []), ...(process.env.VALID_ORIGIN_HOSTS?.split(',') ?? [])])
@@ -136,6 +233,12 @@ export default class Server {
           void res.header('Access-Control-Max-Age', '600') // ask browser to skip pre-flights for 10 minutes after a yes
           if (req.headers['access-control-request-headers']) void res.header('Access-Control-Allow-Headers', req.headers['access-control-request-headers'])
         }
+        try {
+          req.auth = await config.authenticate?.(req)
+        } catch (e: any) {
+          await res.status(401).send('Failed to authenticate.')
+          return res
+        }
       })
       this.app.options('*', async (req, res) => {
         await res.send()
@@ -162,6 +265,8 @@ export default class Server {
           await res.status(err.statusCode).send(err.errors)
         } else if (err instanceof HttpError) {
           await res.status(err.statusCode).send(err.message)
+        } else if (err.code === 'FST_ERR_VALIDATION') {
+          await res.status(422).send({ errors: err.validation?.map(err => ({ message: err.message, path: err.instancePath.substring(1).replace(/\//g, '.'), type: 'error' })) ?? [] })
         } else if (err.statusCode) {
           await res.status(err.statusCode).send(new HttpError(err.statusCode).message)
         } else {
@@ -200,6 +305,8 @@ export default class Server {
 
   public async start (port?: number) {
     const customPort = port ?? parseInt(process.env.PORT ?? '0')
+    await this.app.ready()
+    this.app.swagger?.()
     if (customPort) {
       await this.app.listen({ port: customPort, host: '0.0.0.0' })
     } else if (this.https) {
@@ -239,36 +346,38 @@ export default class Server {
     for (const s of suffixes) this.validOriginSuffixes.add(s)
   }
 
+  public async swagger (opts?: { path?: string, openapi?: FastifyDynamicSwaggerOptions['openapi'], ui?: FastifySwaggerUiOptions }) {
+    let openapi = opts?.openapi ?? {}
+    if (this.config.authenticate === unifiedAuthenticate) {
+      openapi = set(openapi, 'components.securitySchemes', {
+        unifiedAuth: {
+          type: 'http',
+          scheme: 'bearer',
+          bearerFormat: 'JWT',
+          description:
+`Enter a token obtained from the TxState Unified Authentication service. An easy way to do
+this is log into this application and use dev tools to pull your token from the Authorization header.`
+        } satisfies OpenAPIV3.SecuritySchemeObject
+      })
+      // Apply the security globally to all operations
+      openapi.security = [{ unifiedAuth: [] }]
+    }
+    await this.app.register(swagger, { openapi })
+    await this.app.register(swaggerUI, { ...opts?.ui, routePrefix: opts?.path ?? opts?.ui?.routePrefix ?? '/docs' })
+  }
+
   public async close (softSeconds?: number) {
     if (typeof softSeconds === 'undefined') softSeconds = parseInt(process.env.LOAD_BALANCE_TIMEOUT ?? '0')
     process.removeListener('SIGTERM', this.sigHandler)
     process.removeListener('SIGINT', this.sigHandler)
     if (softSeconds) {
       this.shuttingDown = true
-      await new Promise(resolve => setTimeout(resolve, softSeconds! * 1000))
+      await sleep(softSeconds)
     }
     await this.app.close()
   }
 }
 
-export class HttpError extends Error {
-  public statusCode: number
-  constructor (statusCode: number, message?: string) {
-    if (!message) {
-      if (statusCode === 401) message = 'Authentication is required.'
-      else if (statusCode === 403) message = 'You are not authorized for that.'
-      else message = getReasonPhrase(statusCode)
-    }
-    super(message)
-    this.statusCode = statusCode
-  }
-}
-
-type ValidationErrors = Record<string, string[]>
-export class FailedValidationError extends HttpError {
-  public errors: ValidationErrors
-  constructor (errors: ValidationErrors) {
-    super(422, 'Validation failure.')
-    this.errors = errors
-  }
-}
+export * from './analytics'
+export * from './error'
+export * from './unified-auth'

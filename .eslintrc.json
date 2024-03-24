@@ -3,6 +3,7 @@
   "parserOptions": {
       "project": "./tsconfig.eslint.json"
   },
+  "ignorePatterns": ["lib-esm"],
   "rules": {
     "@typescript-eslint/explicit-function-return-type": "off",
     "@typescript-eslint/array-type": "off",

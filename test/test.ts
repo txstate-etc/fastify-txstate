@@ -1,5 +1,7 @@
+/* eslint-disable @typescript-eslint/unbound-method */
 /* eslint-disable @typescript-eslint/no-unused-expressions */
 /* global before, describe, it */
+import type { InteractionEvent } from '@txstate-mws/fastify-shared'
 import axios, { type AxiosInstance } from 'axios'
 import { expect } from 'chai'
 import https from 'https'
@@ -23,7 +25,10 @@ before(async function () {
   for (let i = 0; i < 30; i++) {
     try {
       const resp = await client.get('/health')
-      if (resp.status === 200) break
+      if (resp.status === 200) {
+        const resp2 = await httpsClient.get('/health')
+        if (resp2.status === 200) break
+      }
     } catch (e: any) {
       await new Promise(resolve => setTimeout(resolve, 200))
     }
@@ -182,5 +187,51 @@ describe('logging test', () => {
   it('should log extra info when given', async () => {
     const resp = await httpsClient.get('/logging')
     expect(resp.data.success).to.be.true
+  })
+})
+
+describe('validation tests', () => {
+  it('should accept a payload that validates', async () => {
+    const resp = await client.post('/typed', {
+      str: 'hello',
+      num: 4.3,
+      int: 5
+    })
+    expect(resp.data).to.equal('hello')
+  })
+  it("should reject a payload that doesn't validate", async () => {
+    try {
+      await client.post('/typed', {
+        str: 3,
+        num: 4.3,
+        int: 5.5
+      })
+      expect.fail('should have thrown')
+    } catch (e: any) {
+      expect(e.response.status).to.equal(422)
+      expect(e.response.data.errors[0].message).to.equal('The "int" property must be an integer.')
+    }
+  })
+  it('should have a good dot-separated path when an array element fails to validate', async () => {
+    try {
+      await client.post('/typed', {
+        str: 3,
+        num: 4.3,
+        int: 5,
+        array: [3, 4, 5.6, 7]
+      })
+      expect.fail('should have thrown')
+    } catch (e: any) {
+      expect(e.response.status).to.equal(422)
+      expect(e.response.data.errors.some((err: any) => err.path === 'array.2')).to.be.true
+    }
+  })
+})
+
+describe('analytics tests', () => {
+  it('should accept an analytics event', async () => {
+    const resp = await client.post('/analytics', [{ eventType: 'TestEvent', screen: 'N/A', action: 'Test' } satisfies InteractionEvent])
+    expect(resp.data).to.equal('OK')
+    expect(resp.status).to.equal(202)
   })
 })
