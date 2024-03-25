@@ -2,6 +2,7 @@ import swagger, { type FastifyDynamicSwaggerOptions } from '@fastify/swagger'
 import swaggerUI, { type FastifySwaggerUiOptions } from '@fastify/swagger-ui'
 import type { JsonSchemaToTsProvider } from '@fastify/type-provider-json-schema-to-ts'
 import ajvErrors from 'ajv-errors'
+import ajvFormats from 'ajv-formats'
 import { type FastifyInstance, type FastifyRequest, type FastifyReply, type FastifyServerOptions, fastify, type FastifyLoggerOptions, type FastifyBaseLogger, type RawServerDefault } from 'fastify'
 import fs from 'node:fs'
 import http from 'node:http'
@@ -168,7 +169,7 @@ export default class Server {
       if (['true', '1'].includes(process.env.TRUST_PROXY)) config.trustProxy = true
       else config.trustProxy = process.env.TRUST_PROXY
     }
-    config.ajv = { ...config.ajv, plugins: [...(config.ajv?.plugins?.filter(p => p !== ajvErrors) ?? []), ajvErrors], customOptions: { ...config.ajv?.customOptions, allErrors: true, strictSchema: false } }
+    config.ajv = { ...config.ajv, plugins: [...(config.ajv?.plugins ?? []), ajvErrors, [ajvFormats, { mode: 'fast' }]], customOptions: { ...config.ajv?.customOptions, allErrors: true, strictSchema: false } }
     this.healthCallback = config.checkHealth
     this.app = fastify(config)
     this.app.addHook('onRoute', route => {
