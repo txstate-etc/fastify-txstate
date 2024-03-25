@@ -129,6 +129,8 @@ export const prodLogger: FastifyLoggerOptions = {
   }
 }
 
+export type FastifyInstanceTyped = FastifyInstance<RawServerDefault, http.IncomingMessage, http.ServerResponse<http.IncomingMessage>, FastifyBaseLogger, JsonSchemaToTsProvider>
+export type TxServer = Server
 export default class Server {
   protected https = false
   protected errorHandlers: ErrorHandler[] = []
@@ -139,7 +141,7 @@ export default class Server {
   protected validOrigins: Record<string, boolean> = {}
   protected validOriginHosts: Record<string, boolean> = {}
   protected validOriginSuffixes = new Set<string>()
-  public app: FastifyInstance<RawServerDefault, http.IncomingMessage, http.ServerResponse<http.IncomingMessage>, FastifyBaseLogger, JsonSchemaToTsProvider>
+  public app: FastifyInstanceTyped
 
   constructor (protected config: FastifyTxStateOptions & {
     http2?: true
