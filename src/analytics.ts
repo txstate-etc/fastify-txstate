@@ -1,10 +1,10 @@
 import Elasticsearch from '@elastic/elasticsearch'
 import { interactionEvent, type InteractionEvent } from '@txstate-mws/fastify-shared'
-import type { FastifyBaseLogger, FastifyInstance } from 'fastify'
+import type { FastifyBaseLogger, FastifyInstance, FastifyRequest } from 'fastify'
 import type { IncomingHttpHeaders } from 'http'
 import { Cache, isBlank, pick } from 'txstate-utils'
 import { type IBrowser, UAParser, type IDevice, type IOS } from 'ua-parser-js'
-import { type FastifyTxStateAuthInfo } from '.'
+import { HttpError, type FastifyTxStateAuthInfo } from '.'
 
 export interface StoredInteractionEvent extends InteractionEvent {
   '@timestamp': string
@@ -73,7 +73,7 @@ export class ElasticAnalyticsClient extends AnalyticsClient {
   }
 }
 
-export function analyticsPlugin (fastify: FastifyInstance, opts: { appName: string, analyticsClient?: AnalyticsClient }, done: (err?: Error) => void) {
+export function analyticsPlugin (fastify: FastifyInstance, opts: { appName: string, analyticsClient?: AnalyticsClient, authorize?: (req: FastifyRequest) => boolean }, done: (err?: Error) => void) {
   const environment = process.env.NODE_ENV!
   if (isBlank(environment)) throw new Error('Must set NODE_ENV when reporting analytics.')
 
@@ -141,6 +141,7 @@ export function analyticsPlugin (fastify: FastifyInstance, opts: { appName: stri
 
   fastify.post<{ Body: InteractionEvent[] }>('/analytics', { schema: { body: { type: 'array', items: interactionEvent }, response: { 202: { type: 'string', enum: ['OK'] } } } }, async (req, res) => {
     const { auth } = req
+    if (opts.authorize && !opts.authorize(req)) throw new HttpError(401)
     queueEvents(auth ?? { username: 'unauthenticated' }, req.headers, req.ip, req.body)
     res.statusCode = 202
     return 'OK'
