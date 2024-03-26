@@ -82,7 +82,7 @@ export interface FastifyTxStateOptions extends Partial<FastifyServerOptions> {
    *
    * If this function throws, the client will receive a 401 response.
    */
-  authenticate?: <T extends FastifyTxStateAuthInfo> (req: FastifyRequest) => Promise<T | undefined>
+  authenticate?: (req: FastifyRequest) => Promise<FastifyTxStateAuthInfo | undefined>
 }
 
 declare module 'fastify' {
