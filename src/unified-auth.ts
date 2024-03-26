@@ -166,3 +166,9 @@ export async function unifiedAuthenticate (req: FastifyRequest, ContextClass = T
   const ctx = new ContextClass(req)
   return ctx.waitForAuth()
 }
+
+export async function unifiedAuthenticateAll (req: FastifyRequest, ContextClass = TxStateUAuthContext) {
+  const ctx = new ContextClass(req)
+  const auth = await ctx.waitForAuth()
+  if (!auth?.username.length) throw new Error('All requests require authentication.')
+}

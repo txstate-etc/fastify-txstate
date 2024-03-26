@@ -5,6 +5,7 @@ export const prodLogger = ftxst.prodLogger
 export const HttpError = ftxst.HttpError
 export const FailedValidationError = ftxst.FailedValidationError
 export const unifiedAuthenticate = ftxst.unifiedAuthenticate
+export const unifiedAuthenticateAll = ftxst.unifiedAuthenticateAll
 export const analyticsPlugin = ftxst.analyticsPlugin
 export const AnalyticsClient = ftxst.AnalyticsClient
 export const LoggingAnalyticsClient = ftxst.LoggingAnalyticsClient
