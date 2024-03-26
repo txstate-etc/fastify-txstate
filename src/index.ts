@@ -236,15 +236,27 @@ export default class Server {
           void res.header('Access-Control-Max-Age', '600') // ask browser to skip pre-flights for 10 minutes after a yes
           if (req.headers['access-control-request-headers']) void res.header('Access-Control-Allow-Headers', req.headers['access-control-request-headers'])
         }
+      })
+      this.app.options('*', async (req, res) => {
+        await res.send()
+      })
+    }
+    if (config.authenticate) {
+      const authenticatedMethods: Record<string, boolean | undefined> = {
+        GET: true,
+        POST: true,
+        PUT: true,
+        PATCH: true,
+        DELETE: true
+      }
+      this.app.addHook('preHandler', async (req, res) => {
+        if (!authenticatedMethods[req.method]) return
         try {
-          req.auth = await config.authenticate?.(req)
+          req.auth = await config.authenticate!(req)
         } catch (e: any) {
           await res.status(401).send('Failed to authenticate.')
           return res
         }
-      })
-      this.app.options('*', async (req, res) => {
-        await res.send()
       })
     }
     this.app.addHook('onSend', this.https && process.env.NODE_ENV !== 'development'
