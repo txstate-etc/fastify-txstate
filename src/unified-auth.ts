@@ -171,4 +171,5 @@ export async function unifiedAuthenticateAll (req: FastifyRequest, ContextClass 
   const ctx = new ContextClass(req)
   const auth = await ctx.waitForAuth()
   if (!auth?.username.length) throw new Error('All requests require authentication.')
+  return auth
 }
