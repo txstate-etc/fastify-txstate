@@ -1,6 +1,6 @@
 {
   "name": "fastify-txstate",
-  "version": "3.2.5",
+  "version": "3.2.6",
   "description": "A small wrapper for fastify providing a set of common conventions & utility functions we use.",
   "exports": {
     ".": {
@@ -22,7 +22,7 @@
     "@fastify/swagger": "^8.14.0",
     "@fastify/swagger-ui": "^3.0.0",
     "@fastify/type-provider-json-schema-to-ts": "^3.0.0",
-    "@txstate-mws/fastify-shared": "^1.0.4",
+    "@txstate-mws/fastify-shared": "^1.0.9",
     "ajv-errors": "^3.0.0",
     "ajv-formats": "^2.1.1",
     "fastify": "^4.9.2",

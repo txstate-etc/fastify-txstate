@@ -1,3 +1,4 @@
+import { type FastifySchemaValidationError } from 'fastify/types/schema'
 import { getReasonPhrase } from 'http-status-codes'
 
 export class HttpError extends Error {
@@ -20,4 +21,9 @@ export class FailedValidationError extends HttpError {
     super(422, 'Validation failure.')
     this.errors = errors
   }
+}
+
+export function fstValidationToMessage (v: FastifySchemaValidationError) {
+  const instancePath = v.keyword === 'required' ? v.instancePath + '/' + (v.params.missingProperty as string) : v.instancePath
+  return { message: v.message, path: instancePath.substring(1).replace(/\//g, '.'), type: 'error' }
 }

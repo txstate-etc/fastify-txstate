@@ -1,6 +1,7 @@
 import swagger, { type FastifyDynamicSwaggerOptions } from '@fastify/swagger'
 import swaggerUI, { type FastifySwaggerUiOptions } from '@fastify/swagger-ui'
 import type { JsonSchemaToTsProvider } from '@fastify/type-provider-json-schema-to-ts'
+import { validatedResponse } from '@txstate-mws/fastify-shared'
 import ajvErrors from 'ajv-errors'
 import ajvFormats from 'ajv-formats'
 import { type FastifyInstance, type FastifyRequest, type FastifyReply, type FastifyServerOptions, fastify, type FastifyLoggerOptions, type FastifyBaseLogger, type RawServerDefault } from 'fastify'
@@ -9,8 +10,9 @@ import http from 'node:http'
 import type http2 from 'node:http2'
 import type { OpenAPIV3 } from 'openapi-types'
 import { set, sleep, toArray } from 'txstate-utils'
-import { FailedValidationError, HttpError } from './error'
+import { FailedValidationError, HttpError, fstValidationToMessage } from './error'
 import { unifiedAuthenticate } from './unified-auth'
+import { type FastifySchemaValidationError } from 'fastify/types/schema'
 
 type ErrorHandler = (error: Error, req: FastifyRequest, res: FastifyReply) => Promise<void>
 
@@ -177,25 +179,10 @@ export default class Server {
     this.app.addHook('onRoute', route => {
       if (!route.schema?.body) return
       const missingResponse = route.schema?.response == null
-      const newSchema = set<any>(route.schema ?? {}, 'response.422', {
-        description: 'Validation failure.',
-        type: 'object',
-        properties: {
-          errors: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                type: { type: 'string', enum: ['error', 'warning', 'success', 'system'], example: 'error' },
-                message: { type: 'string', example: 'must be an integer' },
-                path: { type: 'string', example: 'cart.item.0.quantity', description: 'Dot-separated path to the field in the request body that caused the validation error.' }
-              },
-              required: ['type', 'message'],
-              additionalProperties: false
-            }
-          }
-        }
-      })
+      const response400 = set(validatedResponse.properties.messages, 'description', 'Basic validation failure. This means that the UI provided input that failed validation as defined in the openapi specification published by the API. The UI is at fault and should be re-coded to avoid sending invalid data.')
+      let newSchema = set<Record<string, any>>(route.schema ?? {}, 'response.400', response400)
+      const response422 = set(validatedResponse, 'description', 'Validation failure. This means that the user provided an invalid object. The user should be shown their error so that they can correct it.')
+      newSchema = set(newSchema, 'response.422', response422)
       if (missingResponse) {
         newSchema.response['200'] = {
           description: 'Success. Return type has not been specified.',
@@ -281,7 +268,21 @@ export default class Server {
         } else if (err instanceof HttpError) {
           await res.status(err.statusCode).send(err.message)
         } else if (err.code === 'FST_ERR_VALIDATION') {
-          await res.status(422).send({ errors: err.validation?.map(err => ({ message: err.message, path: err.instancePath.substring(1).replace(/\//g, '.'), type: 'error' })) ?? [] })
+          const developerErrors: FastifySchemaValidationError[] = []
+          const userErrors: FastifySchemaValidationError[] = []
+          for (const v of err.validation ?? []) {
+            if (v.keyword === 'errorMessage') {
+              for (const ov of v.params.errors as FastifySchemaValidationError[]) {
+                if (['type', 'additionalProperties'].includes(ov.keyword)) developerErrors.push({ ...ov, message: v.message })
+                else userErrors.push({ ...ov, message: v.message })
+              }
+            } else {
+              if (['type', 'additionalProperties'].includes(v.keyword)) developerErrors.push(v)
+              else userErrors.push(v)
+            }
+          }
+          if (userErrors.length) await res.status(422).send({ success: false, messages: userErrors.map(fstValidationToMessage) })
+          else await res.status(400).send(developerErrors.map(fstValidationToMessage))
         } else if (err.statusCode) {
           await res.status(err.statusCode).send(new HttpError(err.statusCode).message)
         } else {

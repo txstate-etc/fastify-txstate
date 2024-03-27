@@ -199,7 +199,7 @@ describe('validation tests', () => {
     })
     expect(resp.data).to.equal('hello')
   })
-  it("should reject a payload that doesn't validate", async () => {
+  it('should reject a mis-typed payload with a 400 status', async () => {
     try {
       await client.post('/typed', {
         str: 3,
@@ -208,8 +208,8 @@ describe('validation tests', () => {
       })
       expect.fail('should have thrown')
     } catch (e: any) {
-      expect(e.response.status).to.equal(422)
-      expect(e.response.data.errors[0].message).to.equal('The "int" property must be an integer.')
+      expect(e.response.status).to.equal(400)
+      expect(e.response.data[0].message).to.equal('The "int" property must be an integer.')
     }
   })
   it('should have a good dot-separated path when an array element fails to validate', async () => {
@@ -222,8 +222,21 @@ describe('validation tests', () => {
       })
       expect.fail('should have thrown')
     } catch (e: any) {
+      expect(e.response.status).to.equal(400)
+      expect(e.response.data.some((err: any) => err.path === 'array.2')).to.be.true
+    }
+  })
+  it('should reject a payload with 422 status when it is a user error like missing a required field.', async () => {
+    try {
+      await client.post('/typed', {
+        num: 4.3,
+        int: 5,
+        array: [3, 4, 5.6, 7]
+      })
+      expect.fail('should have thrown')
+    } catch (e: any) {
+      console.log(e.response.data)
       expect(e.response.status).to.equal(422)
-      expect(e.response.data.errors.some((err: any) => err.path === 'array.2')).to.be.true
     }
   })
 })
