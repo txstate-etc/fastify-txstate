@@ -1,6 +1,6 @@
 {
   "name": "fastify-txstate",
-  "version": "3.2.7",
+  "version": "3.2.8",
   "description": "A small wrapper for fastify providing a set of common conventions & utility functions we use.",
   "exports": {
     ".": {
@@ -29,7 +29,7 @@
     "fastify-plugin": "^4.5.1",
     "http-status-codes": "^2.1.4",
     "jose": "^5.2.3",
-    "txstate-utils": "^1.8.15",
+    "txstate-utils": "^1.9.1",
     "ua-parser-js": "^1.0.37"
   },
   "devDependencies": {

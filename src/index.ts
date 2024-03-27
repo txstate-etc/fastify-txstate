@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import http from 'node:http'
 import type http2 from 'node:http2'
 import type { OpenAPIV3 } from 'openapi-types'
-import { set, sleep, toArray } from 'txstate-utils'
+import { destroyNulls, set, sleep, toArray } from 'txstate-utils'
 import { FailedValidationError, HttpError, fstValidationToMessage } from './error'
 import { unifiedAuthenticate } from './unified-auth'
 import { type FastifySchemaValidationError } from 'fastify/types/schema'
@@ -174,6 +174,7 @@ export default class Server {
       else config.trustProxy = process.env.TRUST_PROXY
     }
     config.ajv = { ...config.ajv, plugins: [...(config.ajv?.plugins ?? []), ajvErrors, [ajvFormats, { mode: 'fast' }]], customOptions: { ...config.ajv?.customOptions, allErrors: true, strictSchema: false } }
+
     this.healthCallback = config.checkHealth
     this.app = fastify(config)
     this.app.addHook('onRoute', route => {
@@ -190,6 +191,18 @@ export default class Server {
         }
       }
       route.schema = newSchema
+    })
+
+    /**
+     * Fastify validates response schema while serializing the response
+     *
+     * This is great, but because Ajv treats optional properties as non-nullable, optional
+     * properties that are set to `null` instead of `undefined` will fail validation (or with `coerceTypes`,
+     * be converted to empty string or 0 or false). This is silly behavior, so we're adding a hook to
+     * convert all nulls to undefined before fastify validates.
+     */
+    this.app.addHook('preSerialization', async (req, res, payload) => {
+      return destroyNulls(payload)
     })
 
     if (!config.skipOriginCheck && !process.env.SKIP_ORIGIN_CHECK) {
