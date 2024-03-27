@@ -202,7 +202,7 @@ export default class Server {
      * convert all nulls to undefined before fastify validates.
      */
     this.app.addHook('preSerialization', async (req, res, payload) => {
-      return req.routeSchema.response ? destroyNulls(payload) : payload
+      return req.routeSchema?.response ? destroyNulls(payload) : payload
     })
 
     if (!config.skipOriginCheck && !process.env.SKIP_ORIGIN_CHECK) {
