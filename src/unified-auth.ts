@@ -71,7 +71,10 @@ class Context<AuthType extends FastifyTxStateAuthInfo = FastifyTxStateAuthInfo> 
     return this.auth
   }
 
+  protected static hasInitialized = false
   static init () {
+    if (this.hasInitialized) return
+    this.hasInitialized = true
     let secret = cleanPem(process.env.JWT_SECRET_VERIFY)
     if (secret != null) {
       Context.jwtVerifyKey = createPublicKey(secret)
@@ -163,13 +166,15 @@ class TxStateUAuthContext extends Context {
 }
 
 export async function unifiedAuthenticate (req: FastifyRequest, ContextClass = TxStateUAuthContext) {
+  ContextClass.init()
   const ctx = new ContextClass(req)
   return ctx.waitForAuth()
 }
 
 export async function unifiedAuthenticateAll (req: FastifyRequest, ContextClass = TxStateUAuthContext) {
+  ContextClass.init()
   const ctx = new ContextClass(req)
   const auth = await ctx.waitForAuth()
-  if (!auth?.username.length) throw new Error('All requests require authentication.')
+  if (!auth?.username.length && !req.routeOptions.url?.startsWith('/docs')) throw new Error('All requests require authentication.')
   return auth
 }
