@@ -5,6 +5,7 @@ import { validatedResponse } from '@txstate-mws/fastify-shared'
 import ajvErrors from 'ajv-errors'
 import ajvFormats from 'ajv-formats'
 import { type FastifyInstance, type FastifyRequest, type FastifyReply, type FastifyServerOptions, fastify, type FastifyLoggerOptions, type FastifyBaseLogger, type RawServerDefault } from 'fastify'
+import { type FastifySchemaValidationError } from 'fastify/types/schema'
 import fs from 'node:fs'
 import http from 'node:http'
 import type http2 from 'node:http2'
@@ -12,7 +13,6 @@ import type { OpenAPIV3 } from 'openapi-types'
 import { destroyNulls, set, sleep, toArray } from 'txstate-utils'
 import { FailedValidationError, HttpError, fstValidationToMessage } from './error'
 import { unifiedAuthenticate } from './unified-auth'
-import { type FastifySchemaValidationError } from 'fastify/types/schema'
 
 type ErrorHandler = (error: Error, req: FastifyRequest, res: FastifyReply) => Promise<void>
 

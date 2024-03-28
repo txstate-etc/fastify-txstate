@@ -1,6 +1,6 @@
 {
   "name": "fastify-txstate",
-  "version": "3.2.10",
+  "version": "3.2.11",
   "description": "A small wrapper for fastify providing a set of common conventions & utility functions we use.",
   "exports": {
     ".": {
@@ -23,6 +23,7 @@
     "@fastify/swagger-ui": "^3.0.0",
     "@fastify/type-provider-json-schema-to-ts": "^3.0.0",
     "@txstate-mws/fastify-shared": "^1.0.9",
+    "@types/ua-parser-js": ">=0.7.39",
     "ajv-errors": "^3.0.0",
     "ajv-formats": "^2.1.1",
     "fastify": "^4.9.2",
@@ -36,7 +37,6 @@
     "@types/chai": "^4.2.14",
     "@types/mocha": "^10.0.0",
     "@types/node": "^20.0.0",
-    "@types/ua-parser-js": ">=0.7.39",
     "axios": "^1.6.8",
     "chai": "^4.2.0",
     "eslint-config-standard-with-typescript": "^43.0.0",
