@@ -12,7 +12,6 @@ import type http2 from 'node:http2'
 import type { OpenAPIV3 } from 'openapi-types'
 import { destroyNulls, set, sleep, toArray } from 'txstate-utils'
 import { FailedValidationError, HttpError, fstValidationToMessage } from './error'
-import { unifiedAuthenticate } from './unified-auth'
 
 type ErrorHandler = (error: Error, req: FastifyRequest, res: FastifyReply) => Promise<void>
 
@@ -234,6 +233,7 @@ export default class Server {
         } else {
           void res.header('Access-Control-Allow-Origin', req.headers.origin)
           void res.header('Access-Control-Max-Age', '600') // ask browser to skip pre-flights for 10 minutes after a yes
+          if (req.headers['access-control-request-method']) void res.header('access-control-allow-methods', req.headers['access-control-request-method'])
           if (req.headers['access-control-request-headers']) void res.header('Access-Control-Allow-Headers', req.headers['access-control-request-headers'])
         }
       })
@@ -377,7 +377,7 @@ export default class Server {
 
   public async swagger (opts?: { path?: string, openapi?: FastifyDynamicSwaggerOptions['openapi'], ui?: FastifySwaggerUiOptions }) {
     let openapi = opts?.openapi ?? {}
-    if (this.config.authenticate === unifiedAuthenticate) {
+    if (this.config.authenticate != null) {
       openapi = set(openapi, 'components.securitySchemes', {
         unifiedAuth: {
           type: 'http',
