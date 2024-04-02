@@ -1,0 +1,17 @@
+version: '3'
+services:
+  fastify-http:
+    build:
+      context: .
+      dockerfile: Dockerfile.http
+    environment:
+      NODE_ENV: development
+    ports:
+      - 80:80
+      - 9229:9229
+  fastify-https:
+    build:
+      context: .
+      dockerfile: Dockerfile.https
+    environment:
+      NODE_ENV: production

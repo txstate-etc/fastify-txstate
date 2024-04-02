@@ -199,6 +199,27 @@ describe('validation tests', () => {
     })
     expect(resp.data).to.equal('hello')
   })
+  it('should accept a payload that validates and sends null for an optional property', async () => {
+    const resp = await client.post('/typed', {
+      str: 'hello',
+      num: 4.3,
+      int: null
+    })
+    expect(resp.data).to.equal('hello')
+  })
+  it('should not error when the endpoint sends back null for an optional property', async () => {
+    const resp = await client.post('/numtyped', {
+      str: 'hello'
+    })
+    expect(resp.data.num == null).to.be.true
+  })
+  it('should not convert a null to a zero on input or output', async () => {
+    const resp = await client.post('/numtyped', {
+      str: 'hello',
+      num: null
+    })
+    expect(resp.data.num === 0).to.be.false
+  })
   it('should reject a mis-typed payload with a 400 status', async () => {
     try {
       await client.post('/typed', {
@@ -208,6 +229,7 @@ describe('validation tests', () => {
       })
       expect.fail('should have thrown')
     } catch (e: any) {
+      if (e.response == null) throw e
       expect(e.response.status).to.equal(400)
       expect(e.response.data[0].message).to.equal('The "int" property must be an integer.')
     }
@@ -222,6 +244,7 @@ describe('validation tests', () => {
       })
       expect.fail('should have thrown')
     } catch (e: any) {
+      if (e.response == null) throw e
       expect(e.response.status).to.equal(400)
       expect(e.response.data.some((err: any) => err.path === 'array.2')).to.be.true
     }
@@ -235,6 +258,7 @@ describe('validation tests', () => {
       })
       expect.fail('should have thrown')
     } catch (e: any) {
+      if (e.response == null) throw e
       console.log(e.response.data)
       expect(e.response.status).to.equal(422)
     }
@@ -250,8 +274,24 @@ describe('validation tests', () => {
       })
       expect.fail('should have thrown')
     } catch (e: any) {
+      if (e.response == null) throw e
       console.log(e.response.data)
       expect(e.response.status).to.equal(422)
+    }
+  })
+  it('should error out when the route has a bug and returns something invalid', async () => {
+    try {
+      await client.post('/badtyped', {
+        str: 'str',
+        num: 4.3,
+        int: 5,
+        array: [3, 4, 5, 7]
+      })
+      expect.fail('should have thrown')
+    } catch (e: any) {
+      if (e.response == null) throw e
+      console.log(e.response.data)
+      expect(e.response.status).to.equal(500)
     }
   })
 })

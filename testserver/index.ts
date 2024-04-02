@@ -68,8 +68,14 @@ server.swagger().then(async () => {
     res.extraLogInfo = { hello: 'world' }
     return { success: true }
   })
-  server.app.post<{ Body: TypedInputRecursive }>('/typed', { schema: { body: typedInputRecursive } }, (req, res) => {
+  server.app.post<{ Body: TypedInputRecursive }>('/typed', { schema: { body: typedInputRecursive, response: { 200: { type: 'string' } } } }, (req, res) => {
     return req.body.str
+  })
+  server.app.post<{ Body: TypedInputRecursive }>('/numtyped', { schema: { body: typedInputRecursive, response: { 200: { type: 'object', properties: { num: { type: 'number' } } } } } }, (req, res) => {
+    return { num: req.body.num }
+  })
+  server.app.post<{ Body: TypedInputRecursive }>('/badtyped', { schema: { body: typedInputRecursive, response: { 200: { type: 'integer' } } } }, (req, res) => {
+    return 5.5
   })
 })
   .then(async () => server.start())

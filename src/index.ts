@@ -1,3 +1,4 @@
+import Ajv from 'ajv'
 import swagger, { type FastifyDynamicSwaggerOptions } from '@fastify/swagger'
 import swaggerUI, { type FastifySwaggerUiOptions } from '@fastify/swagger-ui'
 import type { JsonSchemaToTsProvider } from '@fastify/type-provider-json-schema-to-ts'
@@ -6,6 +7,7 @@ import ajvErrors from 'ajv-errors'
 import ajvFormats from 'ajv-formats'
 import { type FastifyInstance, type FastifyRequest, type FastifyReply, type FastifyServerOptions, fastify, type FastifyLoggerOptions, type FastifyBaseLogger, type RawServerDefault, type FastifySchema } from 'fastify'
 import { type FastifySchemaValidationError } from 'fastify/types/schema'
+import type { JSONSchema } from 'json-schema-to-ts'
 import fs from 'node:fs'
 import http from 'node:http'
 import type http2 from 'node:http2'
@@ -186,22 +188,39 @@ export default class Server {
       if (missingResponse) {
         newSchema.response['200'] = {
           description: 'Success. Return type has not been specified.',
-          type: 'null'
+          type: 'object'
         }
       }
       route.schema = newSchema
     })
 
-    /**
-     * Fastify validates response schema while serializing the response
-     *
-     * This is great, but because Ajv treats optional properties as non-nullable, optional
-     * properties that are set to `null` instead of `undefined` will fail validation (or with `coerceTypes`,
-     * be converted to empty string or 0 or false). This is silly behavior, so we're adding a hook to
-     * convert all nulls to undefined before fastify validates.
-     */
-    this.app.addHook('preSerialization', async (req, res, payload) => {
-      return req.routeOptions.schema?.response ? destroyNulls(payload) : payload
+    this.app.addHook('preValidation', (req, res, done) => {
+      if (req.body != null && req.routeOptions.schema?.body) destroyNulls(req.body)
+      done()
+    })
+
+    // use Ajv to validate responses instead of @fastify/json-fast-stringify since ajv does
+    // a better job with recursive types and we don't want to have different behavior between
+    // input and output validation
+    const ajv = new Ajv(config.ajv.customOptions)
+    for (const pluginConfig of config.ajv.plugins ?? []) {
+      const [plugin, opts] = toArray(pluginConfig)
+      plugin(ajv, opts)
+    }
+    this.app.setSerializerCompiler((route) => {
+      const schema: JSONSchema | undefined = route.schema
+      const validate = schema == null ? ajv.compile({ type: 'object' }) : ajv.compile(schema)
+      return data => {
+        /**
+         * Ajv unfortunately treats optional properties as non-nullable, so they're allowed to
+         * be undefined but not allowed to be null. Worse, with `coerceTypes`, null will be converted
+         * to empty string or 0 or false. This is silly behavior, so we're converting all nulls to
+         * undefined before we validate.
+         */
+        if (schema != null) destroyNulls(data)
+        if (!validate(data)) throw new Error('Output validation failed: ' + validate.errors?.[0].message)
+        return JSON.stringify(data)
+      }
     })
 
     if (!config.skipOriginCheck && !process.env.SKIP_ORIGIN_CHECK) {
