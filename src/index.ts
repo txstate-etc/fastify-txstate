@@ -4,13 +4,13 @@ import type { JsonSchemaToTsProvider } from '@fastify/type-provider-json-schema-
 import { validatedResponse } from '@txstate-mws/fastify-shared'
 import ajvErrors from 'ajv-errors'
 import ajvFormats from 'ajv-formats'
-import { type FastifyInstance, type FastifyRequest, type FastifyReply, type FastifyServerOptions, fastify, type FastifyLoggerOptions, type FastifyBaseLogger, type RawServerDefault } from 'fastify'
+import { type FastifyInstance, type FastifyRequest, type FastifyReply, type FastifyServerOptions, fastify, type FastifyLoggerOptions, type FastifyBaseLogger, type RawServerDefault, type FastifySchema } from 'fastify'
 import { type FastifySchemaValidationError } from 'fastify/types/schema'
 import fs from 'node:fs'
 import http from 'node:http'
 import type http2 from 'node:http2'
 import type { OpenAPIV3 } from 'openapi-types'
-import { destroyNulls, set, sleep, toArray } from 'txstate-utils'
+import { clone, destroyNulls, set, sleep, toArray } from 'txstate-utils'
 import { FailedValidationError, HttpError, fstValidationToMessage } from './error'
 
 type ErrorHandler = (error: Error, req: FastifyRequest, res: FastifyReply) => Promise<void>
@@ -201,14 +201,14 @@ export default class Server {
      * convert all nulls to undefined before fastify validates.
      */
     this.app.addHook('preSerialization', async (req, res, payload) => {
-      return req.routeSchema?.response ? destroyNulls(payload) : payload
+      return req.routeOptions.schema?.response ? destroyNulls(payload) : payload
     })
 
     if (!config.skipOriginCheck && !process.env.SKIP_ORIGIN_CHECK) {
       this.setValidOrigins([...(config.validOrigins ?? []), ...(process.env.VALID_ORIGINS?.split(',') ?? [])])
       this.setValidOriginHosts([...(config.validOriginHosts ?? []), ...(process.env.VALID_ORIGIN_HOSTS?.split(',') ?? [])])
       this.setValidOriginSuffixes([...(config.validOriginSuffixes ?? []), ...(process.env.VALID_ORIGIN_SUFFIXES?.split(',') ?? [])])
-      this.app.addHook('preHandler', async (req, res) => {
+      this.app.addHook('onRequest', async (req, res) => {
         (res as any).extraLogInfo = {}
         if (!req.headers.origin) return
         let passed = this.validOrigins[req.headers.origin]
@@ -249,7 +249,7 @@ export default class Server {
         PATCH: true,
         DELETE: true
       }
-      this.app.addHook('preHandler', async (req, res) => {
+      this.app.addHook('onRequest', async (req, res) => {
         if (!authenticatedMethods[req.method]) return
         try {
           req.auth = await config.authenticate!(req)
@@ -286,11 +286,11 @@ export default class Server {
           for (const v of err.validation ?? []) {
             if (v.keyword === 'errorMessage') {
               for (const ov of v.params.errors as FastifySchemaValidationError[]) {
-                if (['type', 'additionalProperties'].includes(ov.keyword)) developerErrors.push({ ...ov, message: v.message })
+                if (['type', 'additionalProperties', 'minProperties'].includes(ov.keyword)) developerErrors.push({ ...ov, message: v.message })
                 else userErrors.push({ ...ov, message: v.message })
               }
             } else {
-              if (['type', 'additionalProperties'].includes(v.keyword)) developerErrors.push(v)
+              if (['type', 'additionalProperties', 'minProperties'].includes(v.keyword)) developerErrors.push(v)
               else userErrors.push(v)
             }
           }
@@ -391,7 +391,27 @@ this is log into this application and use dev tools to pull your token from the 
       // Apply the security globally to all operations
       openapi.security = [{ unifiedAuth: [] }]
     }
-    await this.app.register(swagger, { openapi })
+    function findRefs (obj: Record<string, any> | null | undefined, id?: string) {
+      if (obj == null) return undefined
+      if (obj.$id?.length) id = obj.$id
+      if (obj.$ref === '#' && id?.length) {
+        obj.type = 'string'
+        obj.enum = [id]
+        delete obj.$ref
+      } else {
+        for (const val of Object.values(obj)) {
+          if (typeof val === 'object' && !(val instanceof Date)) findRefs(val as Record<string, any>, id)
+        }
+      }
+      return obj
+    }
+    await this.app.register(swagger, {
+      openapi,
+      transform ({ schema, url, route, swaggerObject, openapiObject }) {
+        const newSchema = findRefs(clone(schema))
+        return { schema: newSchema as FastifySchema, url, route, swaggerObject, openapiObject }
+      }
+    })
     await this.app.register(swaggerUI, { ...opts?.ui, routePrefix: opts?.path ?? opts?.ui?.routePrefix ?? '/docs' })
   }
 

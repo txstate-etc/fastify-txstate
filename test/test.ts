@@ -239,6 +239,21 @@ describe('validation tests', () => {
       expect(e.response.status).to.equal(422)
     }
   })
+  it('should reject a payload with an invalid recursive object', async () => {
+    try {
+      await client.post('/typed', {
+        str: 'str',
+        num: 4.3,
+        int: 5,
+        array: [3, 4, 5, 7],
+        more: [{ array: [2, 3, 4] }]
+      })
+      expect.fail('should have thrown')
+    } catch (e: any) {
+      console.log(e.response.data)
+      expect(e.response.status).to.equal(422)
+    }
+  })
 })
 
 describe('analytics tests', () => {

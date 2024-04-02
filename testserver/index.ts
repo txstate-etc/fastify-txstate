@@ -30,7 +30,16 @@ const typedInput = {
   required: ['str'],
   additionalProperties: false
 } as const
+const typedInputRecursive = {
+  ...typedInput,
+  $id: '#typedInput',
+  properties: {
+    ...typedInput.properties,
+    more: { type: 'array', items: { $ref: '#' } }
+  }
+} as const
 export type TypedInput = FromSchema<typeof typedInput>
+export type TypedInputRecursive = TypedInput & { more?: TypedInputRecursive[] }
 server.swagger().then(async () => {
   await server.app.register(analyticsPlugin, { appName: 'testserver' })
   server.app.get('/test', async (req, res) => {
@@ -59,7 +68,7 @@ server.swagger().then(async () => {
     res.extraLogInfo = { hello: 'world' }
     return { success: true }
   })
-  server.app.post('/typed', { schema: { body: typedInput } }, (req, res) => {
+  server.app.post<{ Body: TypedInputRecursive }>('/typed', { schema: { body: typedInputRecursive } }, (req, res) => {
     return req.body.str
   })
 })
