@@ -174,7 +174,7 @@ export default class Server {
       if (['true', '1'].includes(process.env.TRUST_PROXY)) config.trustProxy = true
       else config.trustProxy = process.env.TRUST_PROXY
     }
-    config.ajv = { ...config.ajv, plugins: [...(config.ajv?.plugins ?? []), ajvErrors, [ajvFormats, { mode: 'fast' }]], customOptions: { ...config.ajv?.customOptions, allErrors: true, strictSchema: false } }
+    config.ajv = { ...config.ajv, plugins: [...(config.ajv?.plugins ?? []), ajvErrors, [ajvFormats, { mode: 'fast' }]], customOptions: { ...config.ajv?.customOptions, allErrors: true, strictSchema: false, coerceTypes: true } }
 
     this.healthCallback = config.checkHealth
     this.app = fastify(config)
@@ -218,7 +218,7 @@ export default class Server {
          * undefined before we validate.
          */
         if (schema != null) destroyNulls(data)
-        if (!validate(data)) throw new Error('Output validation failed: ' + validate.errors?.[0].message)
+        if (!validate(data)) throw new Error('Output validation failed. ' + validate.errors?.[0].instancePath + ': ' + validate.errors?.[0].message)
         return JSON.stringify(data)
       }
     })
