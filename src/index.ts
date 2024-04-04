@@ -12,7 +12,7 @@ import fs from 'node:fs'
 import http from 'node:http'
 import type http2 from 'node:http2'
 import type { OpenAPIV3 } from 'openapi-types'
-import { clone, destroyNulls, set, sleep, toArray } from 'txstate-utils'
+import { clone, destroyNulls, set, sleep, stringifyDates, toArray } from 'txstate-utils'
 import { FailedValidationError, HttpError, fstValidationToMessage } from './error'
 
 type ErrorHandler = (error: Error, req: FastifyRequest, res: FastifyReply) => Promise<void>
@@ -217,7 +217,7 @@ export default class Server {
          * to empty string or 0 or false. This is silly behavior, so we're converting all nulls to
          * undefined before we validate.
          */
-        if (schema != null) destroyNulls(data)
+        if (schema != null) destroyNulls(stringifyDates(data))
         if (!validate(data)) throw new Error('Output validation failed. ' + validate.errors?.[0].instancePath + ': ' + validate.errors?.[0].message)
         return JSON.stringify(data)
       }
