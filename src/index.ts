@@ -13,7 +13,7 @@ import http from 'node:http'
 import type http2 from 'node:http2'
 import type { OpenAPIV3 } from 'openapi-types'
 import { clone, destroyNulls, set, sleep, stringifyDates, toArray } from 'txstate-utils'
-import { FailedValidationError, HttpError, fstValidationToMessage } from './error'
+import { FailedValidationError, HttpError, ValidationError, ValidationErrors, fstValidationToMessage } from './error'
 
 type ErrorHandler = (error: Error, req: FastifyRequest, res: FastifyReply) => Promise<void>
 
@@ -297,6 +297,10 @@ export default class Server {
       if (!res.sent) {
         if (err instanceof FailedValidationError) {
           await res.status(err.statusCode).send(err.errors)
+        } else if (err instanceof ValidationError) {
+          await res.status(err.statusCode).send({ success: false, messages: [{ message: err.message, path: err.path, type: err.type ?? 'error' }] })
+        } else if (err instanceof ValidationErrors) {
+          await res.status(err.statusCode).send({ success: false, messages: err.errors })
         } else if (err instanceof HttpError) {
           await res.status(err.statusCode).send(err.message)
         } else if (err.code === 'FST_ERR_VALIDATION') {

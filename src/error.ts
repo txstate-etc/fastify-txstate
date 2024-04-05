@@ -1,4 +1,5 @@
-import { type FastifySchemaValidationError } from 'fastify/types/schema'
+import type { ValidationMessage } from '@txstate-mws/fastify-shared'
+import type { FastifySchemaValidationError } from 'fastify/types/schema'
 import { getReasonPhrase } from 'http-status-codes'
 
 export class HttpError extends Error {
@@ -14,12 +15,22 @@ export class HttpError extends Error {
   }
 }
 
-type ValidationErrors = Record<string, string[]>
 export class FailedValidationError extends HttpError {
-  public errors: ValidationErrors
-  constructor (errors: ValidationErrors) {
+  constructor (public errors: Record<string, string[]>) {
     super(422, 'Validation failure.')
     this.errors = errors
+  }
+}
+
+export class ValidationError extends HttpError {
+  constructor (message: string, public path?: string, public type?: ValidationMessage['type']) {
+    super(422, message)
+  }
+}
+
+export class ValidationErrors extends HttpError {
+  constructor (public errors: ValidationMessage[]) {
+    super(422, errors[0]?.message)
   }
 }
 
