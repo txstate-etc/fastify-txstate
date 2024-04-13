@@ -399,7 +399,7 @@ export default class Server {
 
   public setValidOriginSuffixes (suffixes: string[]) {
     this.validOriginSuffixes.clear()
-    for (const s of suffixes) this.validOriginSuffixes.add(s)
+    for (const s of suffixes) this.validOriginSuffixes.add(s.replace(/^\./, ''))
   }
 
   public async swagger (opts?: { path?: string, openapi?: FastifyDynamicSwaggerOptions['openapi'], ui?: FastifySwaggerUiOptions }) {
