@@ -223,12 +223,16 @@ export default class Server {
       }
     })
 
+    this.app.addHook('onRequest', (req, res, done) => {
+      res.extraLogInfo = {}
+      done()
+    })
+
     if (!config.skipOriginCheck && !process.env.SKIP_ORIGIN_CHECK) {
       this.setValidOrigins([...(config.validOrigins ?? []), ...(process.env.VALID_ORIGINS?.split(',') ?? [])])
       this.setValidOriginHosts([...(config.validOriginHosts ?? []), ...(process.env.VALID_ORIGIN_HOSTS?.split(',') ?? [])])
       this.setValidOriginSuffixes([...(config.validOriginSuffixes ?? []), ...(process.env.VALID_ORIGIN_SUFFIXES?.split(',') ?? [])])
       this.app.addHook('onRequest', async (req, res) => {
-        (res as any).extraLogInfo = {}
         if (!req.headers.origin) return
         let passed = this.validOrigins[req.headers.origin]
         if (!passed && req.headers.origin === 'null') passed = process.env.NODE_ENV === 'development'
