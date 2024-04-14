@@ -28,19 +28,34 @@ server.app.get('/yourpath', async (req, res) => {
 This will result in a 400 error being returned to the client, with a plain text body: `Please provide an id.`
 
 You may skip the message string and a default will be used, e.g. `throw new HttpError(401)` sends a plain text body: `Authentication is required.`
-## FailedValidationError
-This class helps an API communicate with its client about errors that occured during a validation or writing operation. An `errors` object should be passed during construction whose keys correspond to the dot-separated paths of the input object that had problems, and each value is an array of error messages related to that path.
+## ValidationErrors
+This class helps an API communicate with its client about errors that occured during a validation or writing operation. The constructor takes three arguments: a message to be displayed to the user, a dot-separated path to the property of the input object that the message is related to, and a message type, which could be 'error', 'info', 'warning', 'success', or 'system' (system is for errors that the user is not responsible for like a database being offline).
 ```javascript
-const { FailedValidationError } = require('fastify-txstate')
+import { ValidationErrors } from 'fastify-txstate'
+import { hasFatalErrors } from '@txstate-mws/fastify-shared'
 server.app.post('/saveathing', async (req, res) => {
   const thing = req.body
-  const errors = {}
-  if (!thing.title) errors.title = ['Title is required.']
-  if (!thing?.address?.zip) errors['address.zip'] = ['Zip code is required.']
-  if (Object.keys(errors).length) throw new FailedValidationError(errors)
+  const messages = []
+  if (!thing.title) messages.push({ message: 'Title is required.', path: 'title', type: 'error' })
+  if (!thing?.address?.zip) messages.push({ message: 'Zip code is required.', path: 'address.zip', type: 'error' })
+  if (hasFatalErrors(messages)) throw new ValidationErrors(messages)
   /* continue processing request */
 })
 ```
+The client will receive HTTP status 422 and a JSON body that looks like this:
+```json
+{
+  "success": false,
+  "messages": [
+    { "type": "error", "message": "Zip code is required.", "path": "address.zip" }
+  ]
+}
+```
+This format is well supported by our @txstate-mws/svelte-forms library, so it should be easy to pass the errors into your form.
+
+### ValidationError
+`ValidationErrors` is preferred since it will show multiple errors at once, instead of making the user fix errors one at a time and not know how far they are from being done. If you just need to throw a quick single error, `throw new ValidationError('Wrong!', 'answer')` is also available.
+
 ## Custom Error Handling
 If you would like special treatment for certain errors, `addErrorHandler` provides an easy way:
 ```javascript

@@ -15,6 +15,11 @@ export class HttpError extends Error {
   }
 }
 
+/**
+ * @deprecated This response format is less flexible than the one based on the ValidationMessage
+ * interface. Use ValidationError or ValidationErrors instead, and adjust the client to expect
+ * the new format.
+ */
 export class FailedValidationError extends HttpError {
   constructor (public errors: Record<string, string[]>) {
     super(422, 'Validation failure.')
