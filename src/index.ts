@@ -273,7 +273,7 @@ export default class Server {
         DELETE: true
       }
       this.app.addHook('onRequest', async (req, res) => {
-        if (!authenticatedMethods[req.method]) return
+        if (!authenticatedMethods[req.method] || req.routeOptions.url === '/health') return
         try {
           req.auth = await config.authenticate!(req)
         } catch (e: any) {
