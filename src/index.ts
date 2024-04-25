@@ -91,6 +91,7 @@ export interface FastifyTxStateOptions extends Partial<FastifyServerOptions> {
 declare module 'fastify' {
   interface FastifyRequest {
     auth?: FastifyTxStateAuthInfo
+    token?: string
   }
   interface FastifyReply {
     extraLogInfo: any

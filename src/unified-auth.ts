@@ -104,6 +104,7 @@ export async function unifiedAuthenticate (req: FastifyRequest): Promise<Fastify
   const payload = await tokenCache.get(token, req)
   if (!payload) return undefined
   await validateCache.get(token, payload)
+  req.token = token
   return {
     username: payload.sub!,
     sessionId: payload.sub! + '-' + payload.iat,
