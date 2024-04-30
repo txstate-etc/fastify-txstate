@@ -9,7 +9,8 @@ const server = new Server({
   validOrigins: ['http://validorgin.com'],
   validOriginHosts: ['subd.validhost.com'],
   validOriginSuffixes: ['proxiedhost.com'],
-  checkOrigin: req => req.headers['x-auto-cors-pass'] === '1'
+  checkOrigin: req => req.headers['x-auto-cors-pass'] === '1',
+  authenticate: async req => ({ username: 'testuser', sessionId: 'zzzzzzzzzzz' })
 })
 server.addErrorHandler(async (err, req, res) => {
   if (err instanceof CustomError) await res.status(422).send('My Custom Error')

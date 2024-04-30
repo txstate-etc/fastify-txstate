@@ -145,6 +145,7 @@ export default class Server {
   protected validOrigins: Record<string, boolean> = {}
   protected validOriginHosts: Record<string, boolean> = {}
   protected validOriginSuffixes = new Set<string>()
+  protected swaggerEndpoint: string | undefined
   public app: FastifyInstanceTyped
 
   constructor (protected config: FastifyTxStateOptions & {
@@ -274,7 +275,7 @@ export default class Server {
         DELETE: true
       }
       this.app.addHook('onRequest', async (req, res) => {
-        if (!authenticatedMethods[req.method] || req.routeOptions.url === '/health') return
+        if (!authenticatedMethods[req.method] || req.routeOptions.url === '/health' || (this.swaggerEndpoint && req.routeOptions.url?.startsWith(this.swaggerEndpoint))) return
         try {
           req.auth = await config.authenticate!(req)
         } catch (e: any) {
@@ -440,7 +441,8 @@ this is log into this application and use dev tools to pull your token from the 
         return { schema: newSchema as FastifySchema, url, route, swaggerObject, openapiObject }
       }
     })
-    await this.app.register(swaggerUI, { ...opts?.ui, routePrefix: opts?.path ?? opts?.ui?.routePrefix ?? '/docs' })
+    this.swaggerEndpoint = opts?.path ?? opts?.ui?.routePrefix ?? '/docs'
+    await this.app.register(swaggerUI, { ...opts?.ui, routePrefix: this.swaggerEndpoint })
   }
 
   public async close (softSeconds?: number) {
