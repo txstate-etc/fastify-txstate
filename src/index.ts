@@ -127,7 +127,7 @@ export const prodLogger: FastifyLoggerOptions = {
         url: res.request?.url.replace(/(token|unifiedJwt)=[\w.]+/i, '$1=redacted'),
         length: Number(toArray(res.getHeader?.('content-length'))[0]),
         ...res.extraLogInfo,
-        auth: res.request?.auth ?? res.extraLogInfo.auth
+        auth: res.request?.auth ?? res.extraLogInfo?.auth
       }
     }
   }
