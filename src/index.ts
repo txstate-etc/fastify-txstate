@@ -316,10 +316,12 @@ export default class Server {
             if (v.keyword === 'errorMessage') {
               for (const ov of v.params.errors as FastifySchemaValidationError[]) {
                 if (['type', 'additionalProperties', 'minProperties'].includes(ov.keyword)) developerErrors.push({ ...ov, message: v.message })
+                else if (ov.keyword === 'required') userErrors.push({ ...ov, message: 'This field is required.' })
                 else userErrors.push({ ...ov, message: v.message })
               }
             } else {
               if (['type', 'additionalProperties', 'minProperties'].includes(v.keyword)) developerErrors.push(v)
+              else if (v.keyword === 'required') userErrors.push({ ...v, message: 'This field is required.' })
               else userErrors.push(v)
             }
           }
