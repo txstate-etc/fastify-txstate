@@ -115,6 +115,6 @@ export async function unifiedAuthenticate (req: FastifyRequest): Promise<Fastify
 
 export async function unifiedAuthenticateAll (req: FastifyRequest): Promise<FastifyTxStateAuthInfo> {
   const auth = await unifiedAuthenticate(req)
-  if (!auth?.username.length && !req.routeOptions.url?.startsWith('/docs')) throw new Error('All requests require authentication.')
-  return auth!
+  if (!auth?.username.length) throw new Error('All requests require authentication.')
+  return auth
 }
