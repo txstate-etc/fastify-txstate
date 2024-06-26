@@ -1,4 +1,4 @@
-import { createPublicKey, createSecretKey } from 'crypto'
+import { createPublicKey, createSecretKey, randomBytes } from 'crypto'
 import { type FastifyRequest } from 'fastify'
 import { createRemoteJWKSet, decodeJwt, type JWTPayload, jwtVerify, type JWTVerifyGetKey, type KeyLike, type JWTHeaderParameters, type JWK, importJWK } from 'jose'
 import { Cache, isNotBlank, toArray } from 'txstate-utils'
@@ -16,6 +16,7 @@ let hasInit = false
 const issuerKeys = new Map<string, KeyLike | JWTVerifyGetKey>()
 const issuerConfig = new Map<string, IssuerConfig>()
 const trustedClients = new Set<string>()
+export const uaCookieName = process.env.UA_COOKIE_NAME ?? randomBytes(16).toString('hex')
 
 const tokenCache = new Cache(async (token: string, req: FastifyRequest) => {
   const claims = decodeJwt(token)
@@ -92,9 +93,12 @@ function init () {
   }
 }
 
-function tokenFromReq (req?: FastifyRequest) {
+function tokenFromReq (req?: FastifyRequest): string | undefined {
   const m = req?.headers.authorization?.match(/^bearer (.*)$/i)
-  return m?.[1]
+  if (m != null) return m[1]
+
+  const m2 = req?.headers.cookie?.match(new RegExp(`${uaCookieName}=([^;]+)`))
+  if (m2 != null) return m2[1]
 }
 
 export async function unifiedAuthenticate (req: FastifyRequest): Promise<FastifyTxStateAuthInfo | undefined> {
