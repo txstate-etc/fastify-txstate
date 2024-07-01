@@ -1,8 +1,8 @@
 import { createPublicKey, createSecretKey, randomBytes } from 'crypto'
-import { type FastifyRequest } from 'fastify'
+import { type FastifyReply, type FastifyRequest } from 'fastify'
 import { createRemoteJWKSet, decodeJwt, type JWTPayload, jwtVerify, type JWTVerifyGetKey, type KeyLike, type JWTHeaderParameters, type JWK, importJWK } from 'jose'
 import { Cache, isNotBlank, toArray } from 'txstate-utils'
-import { type FastifyTxStateAuthInfo } from '.'
+import { type FastifyInstanceTyped, type FastifyTxStateAuthInfo } from '.'
 
 interface IssuerConfig {
   iss: string
@@ -121,4 +121,71 @@ export async function unifiedAuthenticateAll (req: FastifyRequest): Promise<Fast
   const auth = await unifiedAuthenticate(req)
   if (!auth?.username.length) throw new Error('All requests require authentication.')
   return auth
+}
+
+export async function requireCookieAuth (req: FastifyRequest, res: FastifyReply): Promise<boolean> {
+  if (req.auth === undefined || req.auth.username.length === 0) {
+    await res
+      .header('Set-Cookie', `${uaCookieName}_return=${encodeURIComponent(`${process.env.PUBLIC_URL ?? ''}${req.originalUrl}`)}; Path=/; Secure; HttpOnly; SameSite=Lax`)
+      .redirect(`${process.env.UA_URL ?? ''}/login?clientId=${process.env.UA_CLIENTID ?? ''}&returnUrl=${encodeURIComponent(`${process.env.PUBLIC_URL ?? ''}/.uaService`)}`)
+    return true
+  } else {
+    return false
+  }
+}
+
+export function registerUaCookieRoutes (app: FastifyInstanceTyped): void {
+  app.get(
+    '/.uaLogout',
+    {
+      schema: {
+        headers: {
+          type: 'object',
+          properties: {
+            cookie: { type: 'string', pattern: `${uaCookieName}=[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+` }
+          },
+          required: ['cookie']
+        }
+      }
+    },
+    async (req, res) => {
+      const m = req.headers.cookie.match(new RegExp(`${uaCookieName}=([^;]+)`))
+      if (m == null) return res.code(400).send('Missing UA JWT')
+
+      return res
+        .header('Set-Cookie', `${uaCookieName}=; Path=/; Secure; HttpOnly; SameSite=Lax; Expires=Thu, 01 Jan 1970 00:00:00 GMT`)
+        .redirect(`${process.env.UA_URL ?? ''}/logout?unifiedJwt=${encodeURIComponent(m[1])}`)
+    }
+  )
+
+  app.get(
+    '/.uaService',
+    {
+      schema: {
+        querystring: {
+          type: 'object',
+          properties: {
+            unifiedJwt: { type: 'string', pattern: '^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$' }
+          },
+          required: ['unifiedJwt'],
+          additionalProperties: false
+        },
+        headers: {
+          type: 'object',
+          properties: {
+            cookie: { type: 'string', pattern: `${uaCookieName}_return=${encodeURIComponent(`${process.env.PUBLIC_URL ?? ''}`)}` }
+          },
+          required: ['cookie']
+        }
+      }
+    },
+    async (req, res) => {
+      const m = req.headers.cookie.match(new RegExp(`${uaCookieName}_return=([^;]+)`))
+      if (m == null) return res.code(400).send('Return URL cookie not found')
+      return res
+        .header('Set-Cookie', `${uaCookieName}=${req.query.unifiedJwt}; Path=/; Secure; HttpOnly; SameSite=Lax`)
+        .header('Set-Cookie', `${uaCookieName}_return=; Path=/; Secure; HttpOnly; SameSite=Lax; Expires=Thu, 01 Jan 1970 00:00:00 GMT`)
+        .redirect(decodeURIComponent(m[1]))
+    }
+  )
 }
