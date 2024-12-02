@@ -55,6 +55,14 @@ export interface FastifyTxStateAuthInfo {
    * this field can help log requests that are authenticated with the other application's token.
    */
   clientId?: string
+  /**
+   * A string that designates the current session as one that has limited authorization. The application will
+   * be responsible for checking this field and restricting appropriately.
+   *
+   * For example, a user who authenticated via non-standard mechanism might be given a scope of 'altlogin' and
+   * only a portion of the application's functionality would be available to them.
+   */
+  scope?: string
 }
 
 export interface FastifyTxStateOptions extends Partial<FastifyServerOptions> {

@@ -113,7 +113,8 @@ export async function unifiedAuthenticate (req: FastifyRequest): Promise<Fastify
     username: payload.sub!,
     sessionId: payload.sub! + '-' + payload.iat,
     clientId: payload.client_id as string | undefined,
-    impersonatedBy: (payload.act as any)?.sub as string | undefined
+    impersonatedBy: (payload.act as any)?.sub as string | undefined,
+    scope: payload.scope as string | undefined
   }
 }
 
