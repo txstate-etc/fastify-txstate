@@ -344,18 +344,18 @@ export default class Server {
     })
     this.app.get('/health', { logLevel: 'warn' }, async (req, res) => {
       if (this.shuttingDown) {
-        res.log.info('Returning 503 on /health because we are shutting down/restarting.')
+        res.log.warn('Returning 503 on /health because we are shutting down/restarting.')
         void res.status(503)
         return 'MAINTENANCE'
       } else if (this.healthMessage) {
-        res.log.info(this.healthMessage)
+        res.log.error(this.healthMessage)
         void res.status(500)
         return this.healthMessage
       } else if (this.healthCallback) {
         const resp = await this.healthCallback()
         const [status, msg] = typeof resp === 'string' ? [500, resp] : [resp?.status, resp?.message]
         if (!!msg || !!status) {
-          res.log.info(resp, 'Health check callback failed.')
+          res.log.error(resp, 'Health check callback failed.')
           void res.status(status ?? 500)
           return msg ?? 'FAIL'
         }
