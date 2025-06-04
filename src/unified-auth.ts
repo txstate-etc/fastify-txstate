@@ -71,7 +71,7 @@ function remoteJWKSet (jwkUrl: string) {
 function processIssuerConfig (config: IssuerConfig) {
   if (config.iss === 'unified-auth') {
     config.validateUrl = new URL(config.url ?? '')
-    config.validateUrl.pathname = '/validateToken'
+    config.validateUrl.pathname = [...config.validateUrl.pathname.split('/').slice(0, -1), 'validateToken'].join('/')
   }
   return config
 }

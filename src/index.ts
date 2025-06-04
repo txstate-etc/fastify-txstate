@@ -446,9 +446,9 @@ this is log into this application and use dev tools to pull your token from the 
     }
     await this.app.register(swagger, {
       openapi,
-      transform ({ schema, url, route, swaggerObject, openapiObject }) {
-        const newSchema = findRefs(clone(schema))
-        return { schema: newSchema as FastifySchema, url, route, swaggerObject, openapiObject }
+      transform (transformArgs: any) {
+        const newSchema = findRefs(clone(transformArgs.schema) as Record<string, any>)
+        return { ...transformArgs, schema: newSchema as FastifySchema }
       }
     })
     this.swaggerEndpoint = opts?.path ?? opts?.ui?.routePrefix ?? '/docs'
