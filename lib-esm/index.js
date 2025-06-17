@@ -8,6 +8,7 @@ export const ValidationError = ftxst.ValidationError
 export const ValidationErrors = ftxst.ValidationErrors
 export const unifiedAuthenticate = ftxst.unifiedAuthenticate
 export const unifiedAuthenticateAll = ftxst.unifiedAuthenticateAll
+export const registerUaCookieRoutes = ftxst.registerUaCookieRoutes
 export const analyticsPlugin = ftxst.analyticsPlugin
 export const AnalyticsClient = ftxst.AnalyticsClient
 export const LoggingAnalyticsClient = ftxst.LoggingAnalyticsClient

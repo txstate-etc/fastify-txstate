@@ -15,7 +15,7 @@ let hasInit = false
 const issuerKeys = new Map<string, KeyLike>()
 const issuerConfig = new Map<string, IssuerConfig>()
 const trustedClients = new Set<string>()
-export const uaCookieName = process.env.UA_COOKIE_NAME ?? randomBytes(16).toString('hex')
+const uaCookieName = process.env.UA_COOKIE_NAME ?? randomBytes(16).toString('hex')
 
 const tokenCache = new Cache(async (token: string, req: FastifyRequest) => {
   const claims = decodeJwt(token)
