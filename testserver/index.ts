@@ -1,20 +1,22 @@
 /* eslint-disable @typescript-eslint/no-redeclare */
 import { type FromSchema } from 'json-schema-to-ts'
-import Server, { HttpError, analyticsPlugin } from '../src'
+import { isBlank } from 'txstate-utils'
+import Server, { HttpError, analyticsPlugin, registerUaCookieRoutes, requireCookieAuth, unifiedAuthenticate } from '../src'
 
 class CustomError extends Error {}
 
 const server = new Server({
   trustProxy: true,
-  validOrigins: ['http://validorgin.com'],
+  validOrigins: ['http://validorigin.com'],
   validOriginHosts: ['subd.validhost.com'],
   validOriginSuffixes: ['proxiedhost.com'],
   checkOrigin: req => req.headers['x-auto-cors-pass'] === '1',
-  authenticate: async req => ({ username: 'testuser', sessionId: 'zzzzzzzzzzz' })
+  authenticate: unifiedAuthenticate
 })
 server.addErrorHandler(async (err, req, res) => {
   if (err instanceof CustomError) await res.status(422).send('My Custom Error')
 })
+registerUaCookieRoutes(server.app)
 
 const typedInput = {
   type: 'object',
@@ -77,6 +79,18 @@ server.swagger().then(async () => {
   })
   server.app.post<{ Body: TypedInputRecursive }>('/badtyped', { schema: { body: typedInputRecursive, response: { 200: { type: 'integer' } } } }, (req, res) => {
     return 5.5
+  })
+  server.app.post('/datetime', { schema: { body: { type: 'object', properties: { mydate: { type: 'string', format: 'date-time' } }, required: ['mydate'], additionalProperties: false }, response: { 200: { type: 'object', properties: { yourdate: { type: 'string', format: 'date-time' } } } } } }, (req, res) => {
+    const date = new Date(req.body.mydate)
+    return { yourdate: date.toISOString() }
+  })
+  server.app.post('/protected', async (req, res) => {
+    if (isBlank(req.auth?.username)) throw new HttpError(401, 'Authentication is required.')
+    return { authenticated: req.auth!.username }
+  })
+  server.app.post('/protectedCookie', async (req, res) => {
+    if (await requireCookieAuth(req, res)) return
+    return { authenticated: req.auth?.username }
   })
 })
   .then(async () => server.start())

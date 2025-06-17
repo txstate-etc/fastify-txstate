@@ -10,7 +10,7 @@
     "@typescript-eslint/no-non-null-assertion": "off",
     "@typescript-eslint/require-await": "off",
     "@typescript-eslint/restrict-template-expressions": ["error", { "allowAny": true }], // `${myVar}` is fine if myVar is `any`
-    "@typescript-eslint/return-await": ["error", "in-try-catch"],
+    "@typescript-eslint/return-await": ["error", "error-handling-correctness-only"],
     "@typescript-eslint/strict-boolean-expressions": "off"
   }
 }

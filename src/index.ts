@@ -12,7 +12,7 @@ import fs from 'node:fs'
 import http from 'node:http'
 import type http2 from 'node:http2'
 import type { OpenAPIV3 } from 'openapi-types'
-import { clone, destroyNulls, set, sleep, stringifyDates, toArray } from 'txstate-utils'
+import { clone, destroyNulls, isBlank, set, sleep, stringifyDates, toArray } from 'txstate-utils'
 import { FailedValidationError, HttpError, ValidationError, ValidationErrors, fstValidationToMessage } from './error'
 
 type ErrorHandler = (error: Error, req: FastifyRequest, res: FastifyReply) => Promise<void>
@@ -37,6 +37,13 @@ export interface FastifyTxStateAuthInfo {
    * If all else fails, you can sha256 the session token with a salt.
    */
   sessionId: string
+  /**
+   * The date that the session was created, if available. This is useful for considering
+   * tokens before a certain date as invalid. For instance, if you want a logout action
+   * to invalidate all tokens created until that point, you can compare this field against
+   * the last time they logged out.
+   */
+  sessionCreatedAt?: Date
   /**
    * Some authentication systems allow administrators to impersonate regular users, so that
    * they can see what that user sees and troubleshoot issues. We still want to log the administrator
@@ -63,6 +70,25 @@ export interface FastifyTxStateAuthInfo {
    * only a portion of the application's functionality would be available to them.
    */
   scope?: string
+  /**
+   * The token or key that was used to authenticate the request. This is useful for
+   * making sub-requests to other APIs that can authenticate with the same token.
+   */
+  token: string
+  /**
+   * The issuer configuration for the token, if applicable. This helps you generate
+   * a proper logout url in multi-issuer environments.
+   */
+  issuerConfig?: IssuerConfig
+}
+
+export interface IssuerConfig {
+  iss: string
+  url?: string
+  publicKey?: string
+  secret?: string
+  validateUrl?: URL
+  logoutUrl?: URL
 }
 
 export interface FastifyTxStateOptions extends Partial<FastifyServerOptions> {
@@ -99,6 +125,10 @@ export interface FastifyTxStateOptions extends Partial<FastifyServerOptions> {
 declare module 'fastify' {
   interface FastifyRequest {
     auth?: FastifyTxStateAuthInfo
+    /**
+     * @deprecated Use `req.auth.token` instead. Just trying to keep everything contained.
+     * This will be removed in the next major version.
+     */
     token?: string
   }
   interface FastifyReply {
@@ -283,7 +313,7 @@ export default class Server {
         DELETE: true
       }
       this.app.addHook('onRequest', async (req, res) => {
-        if (!authenticatedMethods[req.method] || req.routeOptions.url === '/health' || (this.swaggerEndpoint && req.routeOptions.url?.startsWith(this.swaggerEndpoint))) return
+        if (!authenticatedMethods[req.method] || isBlank(req.routeOptions.url) || req.routeOptions.url === '/health' || req.routeOptions.url === '/.uaService' || (this.swaggerEndpoint && req.routeOptions.url?.startsWith(this.swaggerEndpoint))) return
         try {
           req.auth = await config.authenticate!(req)
         } catch (e: any) {

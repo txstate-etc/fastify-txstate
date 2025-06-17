@@ -20,6 +20,10 @@ const redirClient = axios.create({
   httpsAgent: new https.Agent({ rejectUnauthorized: false })
 })
 
+const authClient = axios.create({
+  baseURL: 'http://fakeauth',
+})
+
 before(async function () {
   this.timeout(5000)
   for (let i = 0; i < 30; i++) {
@@ -294,6 +298,47 @@ describe('validation tests', () => {
       expect(e.response.status).to.equal(500)
     }
   })
+  it('should accept a date-time formatted string', async () => {
+    const resp = await client.post('/datetime', { mydate: '2023-10-01T12:00:00Z' })
+    expect(new Date(resp.data.yourdate).getTime()).to.equal(new Date('2023-10-01T12:00:00Z').getTime())
+  })
+  it('should accept a date-time formatted string with a non-UTC timezone', async () => {
+    const resp = await client.post('/datetime', { mydate: '2023-10-01T12:00:00-05:00' })
+    expect(new Date(resp.data.yourdate).getTime()).to.equal(new Date('2023-10-01T12:00:00-05:00').getTime())
+  })
+  it('should reject a date-time formatted string with an invalid date', async () => {
+    try {
+      await client.post('/datetime', { mydate: 'invalid-date' })
+      expect.fail('should have thrown')
+    } catch (e: any) {
+      if (e.response == null) throw e
+      expect(e.response.status).to.equal(422)
+    }
+  })
+  it('should accept a date-time formatted string with an impossible date as long as new Date() doesn\'t throw an error', async () => {
+    // I don't like this behavior, but it's how ajv date-time format works, maybe can fix later
+    const resp = await client.post('/datetime', { mydate: '2023-02-30T12:00:00Z' })
+    // February 30th is invalid, but JS Date rolls it over to March 2nd
+    expect(new Date(resp.data.yourdate).getTime()).to.equal(new Date('2023-02-30T12:00:00Z').getTime())
+  })
+  it('should reject a date-time formatted string with an invalid format', async () => {
+    try {
+      await client.post('/datetime', { mydate: '2023-10-01 12:00:00' })
+      expect.fail('should have thrown')
+    } catch (e: any) {
+      if (e.response == null) throw e
+      expect(e.response.status).to.equal(422)
+    }
+  })
+  it('should reject a date-time with no timezone', async () => {
+    try {
+      await client.post('/datetime', { mydate: '2023-10-01T12:00:00' })
+      expect.fail('should have thrown')
+    } catch (e: any) {
+      if (e.response == null) throw e
+      expect(e.response.status).to.equal(422)
+    }
+  })
 })
 
 describe('analytics tests', () => {
@@ -301,5 +346,65 @@ describe('analytics tests', () => {
     const resp = await client.post('/analytics', [{ eventType: 'TestEvent', screen: 'N/A', action: 'Test' } satisfies InteractionEvent])
     expect(resp.data).to.equal('OK')
     expect(resp.status).to.equal(202)
+  })
+})
+
+describe('verifying authentication', () => {
+  it('should not allow access to a protected route without authentication', async () => {
+    try {
+      await client.post('/protected', { test: true})
+      expect.fail('should have thrown')
+    } catch (e: any) {
+      if (e.response == null) throw e
+      expect(e.response.status).to.equal(401)
+    }
+  })
+
+  it('should allow access to a protected route with authentication', async () => {
+    const tokenResp = await authClient.get('/generateToken', { params: { username: 'testuser', clientId: 'fastify-test' } })
+    const token = tokenResp.data
+    const resp = await client.post('/protected', { test: true }, { headers: { Authorization: `Bearer ${token}` } })
+    expect(resp.data).to.deep.equal({ authenticated: 'testuser' })
+  })
+
+  it('should not allow access to a protected route with the wrong clientId', async () => {
+    try {
+      const tokenResp = await authClient.get('/generateToken', { params: { username: 'testuser', clientId: 'wrong-client' } })
+      const token = tokenResp.data
+      await client.post('/protected', { test: true }, { headers: { Authorization: `Bearer ${token}` } })
+      expect.fail('should have thrown')
+    } catch (e: any) {
+      if (e.response == null) throw e
+      expect(e.response.status).to.equal(401)
+    }
+  })
+  it('should redirect requests to the auth server for authentication', async () => {
+    try {
+      const resp = await client.get('/.uaRedirect', { params: { requestedUrl: 'http://fastify-http/protected' }, maxRedirects: 0 })
+    } catch (e: any) {
+      expect(e.response.status).to.equal(302)
+      expect(e.response.headers.location).to.equal('http://fakeauth/login?clientId=fastify-test&returnUrl=http%3A%2F%2Ffastify-http%2F.uaService&requestedUrl=http%3A%2F%2Ffastify-http%2Fprotected')
+    }
+  })
+  let token: string
+  it('should redirect to the requestedUrl after authentication', async () => {
+    try {
+      const tokenResp = await authClient.get('/generateToken', { params: { username: 'testuser', clientId: 'fastify-test' } })
+      token = tokenResp.data
+      await client.get('/.uaService', { params: { unifiedJwt: token, requestedUrl: 'http://fastify-http/protected' }, maxRedirects: 0 })
+    } catch (e: any) {
+      expect(e.response.status).to.equal(302)
+      expect(e.response.headers['set-cookie'][0]).to.include(`fastify_token=${encodeURIComponent(token!)}`)
+      expect(e.response.headers.location).to.equal('http://fastify-http/protected')
+    }
+  })
+  it('should delete the cookie and redirect to unified auth logout upon logout', async () => {
+    try {
+      await client.get('/.uaLogout', { headers: { Cookie: `fastify_token=${encodeURIComponent(token!)}` }, maxRedirects: 0 })
+    } catch (e: any) {
+      expect(e.response.status).to.equal(302)
+      expect(e.response.headers['set-cookie'][0]).to.include('fastify_token=;')
+      expect(e.response.headers.location).to.equal(`http://fakeauth/logout?unifiedJwt=${encodeURIComponent(token!)}`)
+    }
   })
 })

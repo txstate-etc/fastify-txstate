@@ -6,15 +6,24 @@ services:
     depends_on:
       - fastify-http
       - fastify-https
+  fakeauth:
+    image: registry.its.txstate.edu/unified-auth-stub:dev
   fastify-http:
     build:
       context: .
       dockerfile: Dockerfile.http
     environment:
       NODE_ENV: development
+      JWT_TRUSTED_ISSUERS: '[{ "iss": "unified-auth", "url": "http://fakeauth/jwks" }]'
+      JWT_TRUSTED_CLIENTIDS: fastify-test
+      UA_URL: 'http://fakeauth'
+      UA_CLIENTID: fastify-test
+      UA_COOKIE_NAME: fastify_token
   fastify-https:
     build:
       context: .
       dockerfile: Dockerfile.https
     environment:
       NODE_ENV: production
+      JWT_TRUSTED_ISSUERS: '[{ "iss": "unified-auth", "url": "http://fakeauth/jwks" }]'
+      UA_URL: 'http://fakeauth'

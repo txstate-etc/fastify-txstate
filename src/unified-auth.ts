@@ -1,33 +1,32 @@
-import { createPublicKey, createSecretKey, randomBytes } from 'crypto'
+import { createPublicKey, createSecretKey, type KeyObject, randomBytes } from 'crypto'
 import { type FastifyReply, type FastifyRequest } from 'fastify'
-import { createRemoteJWKSet, decodeJwt, type JWTPayload, jwtVerify, type JWTVerifyGetKey, type KeyLike, type JWTHeaderParameters, type JWK, importJWK } from 'jose'
-import { Cache, isNotBlank, toArray } from 'txstate-utils'
-import { type FastifyInstanceTyped, type FastifyTxStateAuthInfo } from '.'
+import { createRemoteJWKSet, decodeJwt, type JWTPayload, jwtVerify, type JWTVerifyGetKey, type JWTHeaderParameters, type JWK, importJWK, type CryptoKey } from 'jose'
+import { Cache, isBlank, isNotBlank, toArray } from 'txstate-utils'
+import { type IssuerConfig, type FastifyInstanceTyped, type FastifyTxStateAuthInfo } from '.'
 
-interface IssuerConfig {
-  iss: string
-  url?: string
-  publicKey?: string
-  secret?: string
-  validateUrl: URL
+export interface IssuerConfigRaw extends Omit<IssuerConfig, 'validateUrl' | 'logoutUrl'> {
+  validateUrl?: string
+  logoutUrl?: string
 }
 
+type KeyLike = CryptoKey | JWTVerifyGetKey | KeyObject
+
 let hasInit = false
-const issuerKeys = new Map<string, KeyLike | JWTVerifyGetKey>()
+const issuerKeys = new Map<string, KeyLike>()
 const issuerConfig = new Map<string, IssuerConfig>()
 const trustedClients = new Set<string>()
 export const uaCookieName = process.env.UA_COOKIE_NAME ?? randomBytes(16).toString('hex')
 
 const tokenCache = new Cache(async (token: string, req: FastifyRequest) => {
   const claims = decodeJwt(token)
-  let verifyKey: KeyLike | JWTVerifyGetKey | undefined
+  let verifyKey: KeyLike | undefined
   if (claims.iss && issuerKeys.has(claims.iss)) verifyKey = issuerKeys.get(claims.iss)
   if (!verifyKey) {
     req.log.warn(`Received token with issuer: ${claims.iss} but JWT secret could not be found. The server may be misconfigured or the user may have presented a JWT from an untrusted issuer.`)
     return undefined
   }
   try {
-    const { payload } = await jwtVerify(token, verifyKey as KeyLike)
+    const { payload } = await jwtVerify(token, verifyKey as CryptoKey)
     if (trustedClients.size && !trustedClients.has(payload.client_id as string)) {
       req.log.warn(`Received token with untrusted client_id: ${payload.client_id as string}.`)
       return undefined
@@ -54,7 +53,7 @@ const validateCache = new Cache(async (token: string, payload: JWTPayload) => {
 
 const jwkCache = new Cache(async (url: string) => {
   const { keys } = await (await fetch(url)).json() as { keys: JWK[] }
-  const publicKeyByKid: Record<string, KeyLike | Uint8Array> = {}
+  const publicKeyByKid: Record<string, CryptoKey | Uint8Array> = {}
   for (const jwk of keys) {
     if (jwk.kid) publicKeyByKid[jwk.kid] = await importJWK(jwk)
   }
@@ -68,18 +67,37 @@ function remoteJWKSet (jwkUrl: string) {
   }
 }
 
-function processIssuerConfig (config: IssuerConfig) {
+function processIssuerConfig (config: IssuerConfigRaw) {
   if (config.iss === 'unified-auth') {
-    config.validateUrl = new URL(config.url ?? '')
-    config.validateUrl.pathname = [...config.validateUrl.pathname.split('/').slice(0, -1), 'validateToken'].join('/')
+    const validateUrl = isNotBlank(config.validateUrl)
+      ? new URL(config.validateUrl, config.url)
+      : isNotBlank(process.env.UA_URL)
+        ? new URL(process.env.UA_URL + '/validateToken')
+        : new URL('validateToken', config.url!)
+
+    const logoutUrl = isNotBlank(config.logoutUrl)
+      ? new URL(config.logoutUrl, config.url)
+      : isNotBlank(process.env.UA_URL)
+        ? new URL(process.env.UA_URL + '/logout')
+        : new URL('logout', config.url!)
+
+    return {
+      ...config,
+      validateUrl,
+      logoutUrl
+    }
   }
-  return config
+  return {
+    ...config,
+    validateUrl: undefined,
+    logoutUrl: config.logoutUrl ? new URL(config.logoutUrl, config.url) : undefined
+  }
 }
 
 function init () {
   hasInit = true
   if (process.env.JWT_TRUSTED_ISSUERS) {
-    const issuers = toArray(JSON.parse(process.env.JWT_TRUSTED_ISSUERS)) as IssuerConfig[]
+    const issuers = toArray(JSON.parse(process.env.JWT_TRUSTED_ISSUERS)) as IssuerConfigRaw[]
     for (const issuer of issuers) {
       issuerConfig.set(issuer.iss, processIssuerConfig(issuer))
       if (issuer.iss === 'unified-auth') issuerKeys.set(issuer.iss, remoteJWKSet(issuer.url!))
@@ -101,7 +119,7 @@ function tokenFromReq (req?: FastifyRequest): string | undefined {
   if (m2 != null) return m2[1]
 }
 
-export async function unifiedAuthenticate (req: FastifyRequest): Promise<FastifyTxStateAuthInfo | undefined> {
+async function unifiedAuthenticateInternal (req: FastifyRequest): Promise<FastifyTxStateAuthInfo | undefined> {
   if (!hasInit) init()
   const token = tokenFromReq(req)
   if (!token) return undefined
@@ -110,25 +128,61 @@ export async function unifiedAuthenticate (req: FastifyRequest): Promise<Fastify
   await validateCache.get(token, payload)
   req.token = token
   return {
+    token,
+    issuerConfig: payload.iss ? issuerConfig.get(payload.iss) : undefined,
     username: payload.sub!,
     sessionId: payload.sub! + '-' + payload.iat,
+    sessionCreatedAt: payload.iat ? new Date(payload.iat * 1000) : undefined,
     clientId: payload.client_id as string | undefined,
     impersonatedBy: (payload.act as any)?.sub as string | undefined,
     scope: payload.scope as string | undefined
   }
 }
 
-export async function unifiedAuthenticateAll (req: FastifyRequest): Promise<FastifyTxStateAuthInfo> {
-  const auth = await unifiedAuthenticate(req)
-  if (!auth?.username.length) throw new Error('All requests require authentication.')
+export async function unifiedAuthenticate (req: FastifyRequest, options?: {
+  // If true, all requests require authentication, except a few routes created by fastify-txstate,
+  // like /docs and /.uaService.
+  authenticateAll?: boolean
+  // If authenticateAll is true, you can set this option to exclude certain routes.
+  exceptRoutes?: Set<string>
+  // Set this true if you are using the registerUaCookieRoutes function and set
+  // authenticateAll to true. They will break if you don't.
+  usingUaCookieRoutes?: boolean
+}): Promise<FastifyTxStateAuthInfo | undefined> {
+  const auth = await unifiedAuthenticateInternal(req)
+  if (options?.usingUaCookieRoutes) {
+    options.exceptRoutes ??= new Set<string>()
+    options.exceptRoutes.add('/.uaService')
+    options.exceptRoutes.add('/.uaRedirect')
+  }
+  const isAuthenticatedRoute = options?.authenticateAll && (
+    options.exceptRoutes == null || !options.exceptRoutes.has(req.routeOptions.url!)
+  )
+  if (isAuthenticatedRoute) {
+    if (isBlank(auth?.username)) throw new Error('Request requires authentication.')
+  }
   return auth
 }
 
+/**
+ * @deprecated Use unifiedAuthenticateWithOptions with { authenticateAll: true } instead.
+ */
+export async function unifiedAuthenticateAll (req: FastifyRequest): Promise<FastifyTxStateAuthInfo> {
+  return (await unifiedAuthenticate(req, { authenticateAll: true }))!
+}
+
+/**
+ * This function is available for server-side view code instead of a client-side application
+ * using a framework. It will automatically redirect the user to the Unified Auth login page
+ * and return true if they are not authenticated. Otherwise it simply returns false.
+ */
 export async function requireCookieAuth (req: FastifyRequest, res: FastifyReply): Promise<boolean> {
-  if (req.auth === undefined || req.auth.username.length === 0) {
-    await res
-      .header('Set-Cookie', `${uaCookieName}_return=${encodeURIComponent(`${process.env.PUBLIC_URL ?? ''}${req.originalUrl}`)}; Path=/; Secure; HttpOnly; SameSite=Lax`)
-      .redirect(`${process.env.UA_URL ?? ''}/login?clientId=${process.env.UA_CLIENTID ?? ''}&returnUrl=${encodeURIComponent(`${process.env.PUBLIC_URL ?? ''}/.uaService`)}`)
+  if (isBlank(req.auth?.username)) {
+    const loginUrl = new URL(process.env.UA_URL! + '/login')
+    loginUrl.searchParams.set('clientId', process.env.UA_CLIENTID!)
+    loginUrl.searchParams.set('returnUrl', isNotBlank(process.env.PUBLIC_URL) ? new URL(process.env.PUBLIC_URL + '/.uaService').toString() : new URL('/.uaService', req.url).toString())
+    loginUrl.searchParams.set('requestedUrl', req.originalUrl)
+    void res.redirect(loginUrl.toString())
     return true
   } else {
     return false
@@ -150,12 +204,12 @@ export function registerUaCookieRoutes (app: FastifyInstanceTyped): void {
       }
     },
     async (req, res) => {
-      const m = req.headers.cookie.match(new RegExp(`${uaCookieName}=([^;]+)`))
-      if (m == null) return res.code(400).send('Missing UA JWT')
-
+      const redirectUrl = req.auth?.issuerConfig?.logoutUrl
+        ? `${req.auth.issuerConfig.logoutUrl.toString()}?unifiedJwt=${encodeURIComponent(req.auth.token)}`
+        : (process.env.PUBLIC_URL || new URL('..', req.url).toString())
       return res
         .header('Set-Cookie', `${uaCookieName}=; Path=/; Secure; HttpOnly; SameSite=Lax; Expires=Thu, 01 Jan 1970 00:00:00 GMT`)
-        .redirect(`${process.env.UA_URL ?? ''}/logout?unifiedJwt=${encodeURIComponent(m[1])}`)
+        .redirect(redirectUrl)
     }
   )
 
@@ -166,27 +220,43 @@ export function registerUaCookieRoutes (app: FastifyInstanceTyped): void {
         querystring: {
           type: 'object',
           properties: {
-            unifiedJwt: { type: 'string', pattern: '^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$' }
+            unifiedJwt: { type: 'string', pattern: '^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$' },
+            requestedUrl: { type: 'string', format: 'uri' }
           },
           required: ['unifiedJwt'],
           additionalProperties: false
-        },
-        headers: {
-          type: 'object',
-          properties: {
-            cookie: { type: 'string', pattern: `${uaCookieName}_return=${encodeURIComponent(`${process.env.PUBLIC_URL ?? ''}`)}` }
-          },
-          required: ['cookie']
         }
       }
     },
     async (req, res) => {
-      const m = req.headers.cookie.match(new RegExp(`${uaCookieName}_return=([^;]+)`))
-      if (m == null) return res.code(400).send('Return URL cookie not found')
       return res
         .header('Set-Cookie', `${uaCookieName}=${req.query.unifiedJwt}; Path=/; Secure; HttpOnly; SameSite=Lax`)
-        .header('Set-Cookie', `${uaCookieName}_return=; Path=/; Secure; HttpOnly; SameSite=Lax; Expires=Thu, 01 Jan 1970 00:00:00 GMT`)
-        .redirect(decodeURIComponent(m[1]))
+        .redirect(req.query.requestedUrl ?? (process.env.PUBLIC_URL || new URL('..', req.url).toString()))
     }
   )
+
+  /**
+   * In the case of a client-side application that uses the UA cookie to authenticate,
+   * the client code can detect a 401 from the API and redirect the user to this endpoint.
+   *
+   * This endpoint will redirect the browser to Unified Auth so that the client code does
+   * not need to have any configuration for Unified Auth.
+   */
+  app.get('/.uaRedirect', {
+    schema: {
+      querystring: {
+        type: 'object',
+        properties: {
+          requestedUrl: { type: 'string', format: 'uri' }
+        },
+        additionalProperties: false
+      }
+    }
+  }, async (req, res) => {
+    const loginUrl = new URL(process.env.UA_URL! + '/login')
+    loginUrl.searchParams.set('clientId', process.env.UA_CLIENTID!)
+    loginUrl.searchParams.set('returnUrl', new URL('.uaService', process.env.PUBLIC_URL || new URL(req.url, req.protocol + '://' + req.hostname)).toString())
+    if (req.query.requestedUrl) loginUrl.searchParams.set('requestedUrl', req.query.requestedUrl)
+    return res.redirect(loginUrl.toString())
+  })
 }
