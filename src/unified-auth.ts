@@ -16,6 +16,7 @@ const issuerKeys = new Map<string, KeyLike>()
 const issuerConfig = new Map<string, IssuerConfig>()
 const trustedClients = new Set<string>()
 const uaCookieName = process.env.UA_COOKIE_NAME ?? randomBytes(16).toString('hex')
+const uaCookieNameRegex = new RegExp(`${uaCookieName}=([^;]+)`)
 
 const tokenCache = new Cache(async (token: string, req: FastifyRequest) => {
   const claims = decodeJwt(token)
@@ -71,9 +72,7 @@ function processIssuerConfig (config: IssuerConfigRaw) {
   if (config.iss === 'unified-auth') {
     const validateUrl = isNotBlank(config.validateUrl)
       ? new URL(config.validateUrl, config.url)
-      : isNotBlank(process.env.UA_URL)
-        ? new URL(process.env.UA_URL + '/validateToken')
-        : new URL('validateToken', config.url!)
+      : new URL('validateToken', config.url!)
 
     const logoutUrl = isNotBlank(config.logoutUrl)
       ? new URL(config.logoutUrl, config.url)
@@ -115,7 +114,7 @@ function tokenFromReq (req?: FastifyRequest): string | undefined {
   const m = req?.headers.authorization?.match(/^bearer (.*)$/i)
   if (m != null) return m[1]
 
-  const m2 = req?.headers.cookie?.match(new RegExp(`${uaCookieName}=([^;]+)`))
+  const m2 = req?.headers.cookie?.match(uaCookieNameRegex)
   if (m2 != null) return m2[1]
 }
 
