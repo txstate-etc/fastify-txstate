@@ -17,6 +17,7 @@ const issuerConfig = new Map<string, IssuerConfig>()
 const trustedClients = new Set<string>()
 const uaCookieName = process.env.UA_COOKIE_NAME ?? randomBytes(16).toString('hex')
 const uaCookieNameRegex = new RegExp(`${uaCookieName}=([^;]+)`)
+const uaServiceUrl = isNotBlank(process.env.PUBLIC_URL) ? process.env.PUBLIC_URL + (process.env.PUBLIC_URL.endsWith('/') ? '' : '/') + '.uaService' : undefined
 
 const tokenCache = new Cache(async (token: string, req: FastifyRequest) => {
   const claims = decodeJwt(token)
@@ -179,7 +180,7 @@ export async function requireCookieAuth (req: FastifyRequest, res: FastifyReply)
   if (isBlank(req.auth?.username)) {
     const loginUrl = new URL(process.env.UA_URL! + '/login')
     loginUrl.searchParams.set('clientId', process.env.UA_CLIENTID!)
-    loginUrl.searchParams.set('returnUrl', isNotBlank(process.env.PUBLIC_URL) ? new URL(process.env.PUBLIC_URL + '/.uaService').toString() : new URL('/.uaService', req.url).toString())
+    loginUrl.searchParams.set('returnUrl', uaServiceUrl ?? new URL('/.uaService', req.url).toString())
     loginUrl.searchParams.set('requestedUrl', req.originalUrl)
     void res.redirect(loginUrl.toString())
     return true
@@ -254,7 +255,8 @@ export function registerUaCookieRoutes (app: FastifyInstanceTyped): void {
   }, async (req, res) => {
     const loginUrl = new URL(process.env.UA_URL! + '/login')
     loginUrl.searchParams.set('clientId', process.env.UA_CLIENTID!)
-    loginUrl.searchParams.set('returnUrl', new URL('.uaService', process.env.PUBLIC_URL || new URL(req.url, req.protocol + '://' + req.hostname)).toString())
+    const returnUrl = uaServiceUrl ?? new URL('.uaService', req.protocol + '://' + req.hostname).toString()
+    loginUrl.searchParams.set('returnUrl', returnUrl)
     if (req.query.requestedUrl) loginUrl.searchParams.set('requestedUrl', req.query.requestedUrl)
     return res.redirect(loginUrl.toString())
   })
