@@ -3,6 +3,7 @@ import { type FastifyReply, type FastifyRequest } from 'fastify'
 import { createRemoteJWKSet, decodeJwt, type JWTPayload, jwtVerify, type JWTVerifyGetKey, type JWTHeaderParameters, type JWK, importJWK, type CryptoKey } from 'jose'
 import { Cache, isBlank, isNotBlank, toArray } from 'txstate-utils'
 import { type IssuerConfig, type FastifyInstanceTyped, type FastifyTxStateAuthInfo } from '.'
+import { config } from 'process'
 
 export interface IssuerConfigRaw extends Omit<IssuerConfig, 'validateUrl' | 'logoutUrl'> {
   validateUrl?: string
@@ -143,8 +144,12 @@ export async function unifiedAuthenticate (req: FastifyRequest, options?: {
   // If true, all requests require authentication, except a few routes created by fastify-txstate,
   // like /docs and /.uaService.
   authenticateAll?: boolean
-  // If authenticateAll is true, you can set this option to exclude certain routes.
+  // You can set this option to exclude certain routes from authentication. They will
+  // not receive an auth object, even if a cookie or bearer token is present.
   exceptRoutes?: Set<string>
+  // If authenticateAll is true, you can set this to a set of routes that do not require
+  // authentication, but will fill req.auth if a session is available.
+  optionalRoutes?: Set<string>
   // Set this true if you are using the registerUaCookieRoutes function and set
   // authenticateAll to true. They will break if you don't.
   usingUaCookieRoutes?: boolean
@@ -154,14 +159,18 @@ export async function unifiedAuthenticate (req: FastifyRequest, options?: {
     options.exceptRoutes ??= new Set<string>()
     options.exceptRoutes.add('/.uaService')
     options.exceptRoutes.add('/.uaRedirect')
+    options.optionalRoutes ??= new Set<string>()
+    options.optionalRoutes.add('/.uaLogout')
   }
-  const isAuthenticatedRoute = options?.authenticateAll && (
-    options.exceptRoutes == null || !options.exceptRoutes.has(req.routeOptions.url!)
-  )
-  if (isAuthenticatedRoute) {
-    if (isBlank(auth?.username)) throw new Error('Request requires authentication.')
+  const isNoAuthenticationRoute = options?.exceptRoutes?.has(req.routeOptions.url!)
+  const requiresAuthenticationRoute = options?.authenticateAll &&
+    !options?.exceptRoutes?.has(req.routeOptions.url!) &&
+    !options?.optionalRoutes?.has(req.routeOptions.url!)
+
+  if (requiresAuthenticationRoute && isBlank(auth?.username)) {
+    throw new Error('Request requires authentication.')
   }
-  return auth
+  return isNoAuthenticationRoute ? undefined : auth
 }
 
 /**
@@ -204,7 +213,7 @@ export function registerUaCookieRoutes (app: FastifyInstanceTyped): void {
       }
     },
     async (req, res) => {
-      const redirectUrl = req.auth?.issuerConfig?.logoutUrl
+      const redirectUrl = req.auth?.issuerConfig?.logoutUrl && isNotBlank(req.auth.token)
         ? `${req.auth.issuerConfig.logoutUrl.toString()}?unifiedJwt=${encodeURIComponent(req.auth.token)}`
         : (process.env.PUBLIC_URL || new URL('..', req.url).toString())
       return res
@@ -253,8 +262,10 @@ export function registerUaCookieRoutes (app: FastifyInstanceTyped): void {
       }
     }
   }, async (req, res) => {
-    const loginUrl = new URL(process.env.UA_URL! + '/login')
-    loginUrl.searchParams.set('clientId', process.env.UA_CLIENTID!)
+    const loginUrl = isNotBlank(process.env.UA_URL)
+      ? new URL(process.env.UA_URL + '/login')
+      : new URL('login', issuerConfig.get('unified-auth')?.url)
+    loginUrl.searchParams.set('clientId', process.env.UA_CLIENTID ?? process.env.JWT_TRUSTED_CLIENTIDS!.split(',')[0])
     const returnUrl = uaServiceUrl ?? new URL('.uaService', req.protocol + '://' + req.hostname).toString()
     loginUrl.searchParams.set('returnUrl', returnUrl)
     if (req.query.requestedUrl) loginUrl.searchParams.set('requestedUrl', req.query.requestedUrl)
