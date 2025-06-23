@@ -364,7 +364,8 @@ describe('verifying authentication', () => {
     const tokenResp = await authClient.get('/generateToken', { params: { username: 'testuser', clientId: 'fastify-test' } })
     const token = tokenResp.data
     const resp = await client.post('/protected', { test: true }, { headers: { Authorization: `Bearer ${token}` } })
-    expect(resp.data).to.deep.equal({ authenticated: 'testuser' })
+    expect(resp.data.authenticated).to.equal('testuser')
+    expect(new Date().getTime() - new Date(resp.data.sessionCreatedAt).getTime()).to.be.lessThan(10000)
   })
 
   it('should not allow access to a protected route with the wrong clientId', async () => {

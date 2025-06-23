@@ -12,7 +12,7 @@ import fs from 'node:fs'
 import http from 'node:http'
 import type http2 from 'node:http2'
 import type { OpenAPIV3 } from 'openapi-types'
-import { clone, destroyNulls, isBlank, set, sleep, stringifyDates, toArray } from 'txstate-utils'
+import { clone, destroyNulls, isBlank, omit, set, sleep, stringifyDates, toArray } from 'txstate-utils'
 import { FailedValidationError, HttpError, ValidationError, ValidationErrors, fstValidationToMessage } from './error'
 
 type ErrorHandler = (error: Error, req: FastifyRequest, res: FastifyReply) => Promise<void>
@@ -165,7 +165,7 @@ export const prodLogger: FastifyLoggerOptions = {
         url: res.request?.url.replace(/(token|unifiedJwt)=[\w.]+/i, '$1=redacted'),
         length: Number(toArray(res.getHeader?.('content-length'))[0]),
         ...res.extraLogInfo,
-        auth: res.request?.auth ?? res.extraLogInfo?.auth
+        auth: omit(res.request?.auth ?? res.extraLogInfo?.auth ?? {}, 'token', 'issuerConfig')
       }
     }
   }

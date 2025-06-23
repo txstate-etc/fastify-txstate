@@ -86,7 +86,7 @@ server.swagger().then(async () => {
   })
   server.app.post('/protected', async (req, res) => {
     if (isBlank(req.auth?.username)) throw new HttpError(401, 'Authentication is required.')
-    return { authenticated: req.auth!.username }
+    return { authenticated: req.auth!.username, sessionCreatedAt: req.auth!.sessionCreatedAt }
   })
   server.app.post('/protectedCookie', async (req, res) => {
     if (await requireCookieAuth(req, res)) return
