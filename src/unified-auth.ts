@@ -1,9 +1,8 @@
 import { createPublicKey, createSecretKey, type KeyObject, randomBytes } from 'crypto'
 import { type FastifyReply, type FastifyRequest } from 'fastify'
-import { createRemoteJWKSet, decodeJwt, type JWTPayload, jwtVerify, type JWTVerifyGetKey, type JWTHeaderParameters, type JWK, importJWK, type CryptoKey } from 'jose'
+import { createRemoteJWKSet, decodeJwt, type JWTPayload, jwtVerify, type JWTVerifyGetKey, type JWTHeaderParameters, type JWK, importJWK } from 'jose'
 import { Cache, isBlank, isNotBlank, toArray } from 'txstate-utils'
 import { type IssuerConfig, type FastifyInstanceTyped, type FastifyTxStateAuthInfo } from '.'
-import { config } from 'process'
 
 export interface IssuerConfigRaw extends Omit<IssuerConfig, 'validateUrl' | 'logoutUrl'> {
   validateUrl?: string

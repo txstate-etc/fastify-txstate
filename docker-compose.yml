@@ -3,15 +3,18 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.test
+    attach: true
     depends_on:
       - fastify-http
       - fastify-https
   fakeauth:
     image: registry.its.txstate.edu/unified-auth-stub:dev
+    attach: false
   fastify-http:
     build:
       context: .
       dockerfile: Dockerfile.http
+    attach: false
     environment:
       NODE_ENV: development
       JWT_TRUSTED_ISSUERS: '[{ "iss": "unified-auth", "url": "http://fakeauth/jwks" }]'
@@ -23,6 +26,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.https
+    attach: false
     environment:
       NODE_ENV: production
       JWT_TRUSTED_ISSUERS: '[{ "iss": "unified-auth", "url": "http://fakeauth/jwks" }]'
