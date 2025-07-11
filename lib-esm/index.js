@@ -13,4 +13,6 @@ export const analyticsPlugin = ftxst.analyticsPlugin
 export const AnalyticsClient = ftxst.AnalyticsClient
 export const LoggingAnalyticsClient = ftxst.LoggingAnalyticsClient
 export const ElasticAnalyticsClient = ftxst.ElasticAnalyticsClient
+export const postFormData = ftxst.postFormData
+export const readableToWebReadable = ftxst.readableToWebReadable
 export default ftxst.default

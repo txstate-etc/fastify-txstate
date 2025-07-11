@@ -1,7 +1,8 @@
 /* eslint-disable @typescript-eslint/no-redeclare */
+import fastifyMultipart from '@fastify/multipart'
 import { type FromSchema } from 'json-schema-to-ts'
 import { isBlank } from 'txstate-utils'
-import Server, { HttpError, analyticsPlugin, registerUaCookieRoutes, requireCookieAuth, unifiedAuthenticate } from '../src'
+import Server, { FormDataField, HttpError, analyticsPlugin, postFormData, registerUaCookieRoutes, requireCookieAuth, unifiedAuthenticate } from '../src'
 
 class CustomError extends Error {}
 
@@ -45,6 +46,8 @@ export type TypedInput = FromSchema<typeof typedInput>
 export type TypedInputRecursive = TypedInput & { more?: TypedInputRecursive[] }
 server.swagger().then(async () => {
   await server.app.register(analyticsPlugin, { appName: 'testserver' })
+  await server.app.register(fastifyMultipart)
+
   server.app.get('/test', async (req, res) => {
     return { hello: 'world' }
   })
@@ -91,6 +94,31 @@ server.swagger().then(async () => {
   server.app.post('/protectedCookie', async (req, res) => {
     if (await requireCookieAuth(req, res)) return
     return { authenticated: req.auth?.username }
+  })
+  server.app.post('/acceptupload', async (req, res) => {
+    let contentLength = 0
+    for await (const part of req.parts()) {
+      if (part.type === 'file') {
+        for await (const chunk of part.file) {
+          contentLength += chunk.length
+        }
+      }
+    }
+    return { received: contentLength }
+  })
+  server.app.post('/proxymultipart', async (req, res) => {
+    if (req.isMultipart()) {
+      const fields: FormDataField[] = []
+      for await (const part of req.parts()) {
+        if (part.type === 'file') {
+          fields.push({ name: part.fieldname, value: part.file, filename: part.filename, filetype: part.mimetype })
+        }
+      }
+      const resp = await postFormData('http://fastify-http/acceptupload', fields)
+      return await resp.json()
+    } else {
+      throw new HttpError(400, 'Expected multipart/form-data')
+    }
   })
 })
   .then(async () => server.start())
