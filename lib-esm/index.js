@@ -15,4 +15,6 @@ export const LoggingAnalyticsClient = ftxst.LoggingAnalyticsClient
 export const ElasticAnalyticsClient = ftxst.ElasticAnalyticsClient
 export const postFormData = ftxst.postFormData
 export const readableToWebReadable = ftxst.readableToWebReadable
+export const FileSystemHandler = ftxst.FileSystemHandler
+export const fileHandler = ftxst.fileHandler
 export default ftxst.default

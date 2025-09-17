@@ -1,5 +1,5 @@
 import { Readable } from 'node:stream'
-import { ReadableStream } from 'node:stream/web'
+import { ReadableStream, ReadableStreamDefaultReader } from 'node:stream/web'
 
 export interface FormDataTextField {
   name: string

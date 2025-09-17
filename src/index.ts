@@ -499,5 +499,6 @@ this is log into this application and use dev tools to pull your token from the 
 
 export * from './analytics'
 export * from './error'
+export * from './filestorage'
 export * from './unified-auth'
 export * from './postformdata'
