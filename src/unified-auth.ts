@@ -1,7 +1,7 @@
 import { createPublicKey, createSecretKey, type KeyObject, randomBytes } from 'crypto'
 import { type FastifyReply, type FastifyRequest } from 'fastify'
 import { createRemoteJWKSet, decodeJwt, type JWTPayload, jwtVerify, type JWTVerifyGetKey, type JWTHeaderParameters, type JWK, importJWK } from 'jose'
-import { Cache, isBlank, isNotBlank, toArray } from 'txstate-utils'
+import { Cache, htmlEncode, isBlank, isNotBlank, toArray } from 'txstate-utils'
 import { type IssuerConfig, type FastifyInstanceTyped, type FastifyTxStateAuthInfo } from '.'
 
 export interface IssuerConfigRaw extends Omit<IssuerConfig, 'validateUrl' | 'logoutUrl'> {
@@ -215,9 +215,17 @@ export function registerUaCookieRoutes (app: FastifyInstanceTyped): void {
       const redirectUrl = req.auth?.issuerConfig?.logoutUrl && isNotBlank(req.auth.token)
         ? `${req.auth.issuerConfig.logoutUrl.toString()}?unifiedJwt=${encodeURIComponent(req.auth.token)}`
         : (process.env.PUBLIC_URL || new URL('..', req.url).toString())
-      return res
-        .header('Set-Cookie', `${uaCookieName}=; Path=/; Secure; HttpOnly; SameSite=Lax; Expires=Thu, 01 Jan 1970 00:00:00 GMT`)
-        .redirect(redirectUrl)
+      void res.header('Set-Cookie', `${uaCookieName}=; Path=/; Secure; HttpOnly; SameSite=Lax; Expires=Thu, 01 Jan 1970 00:00:00 GMT`)
+      return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="refresh" content="0; url=${htmlEncode(redirectUrl)}">
+  <title>Logging out...</title>
+</head>
+<body>
+</body>
+</html>`
     }
   )
 
@@ -237,9 +245,18 @@ export function registerUaCookieRoutes (app: FastifyInstanceTyped): void {
       }
     },
     async (req, res) => {
-      return res
-        .header('Set-Cookie', `${uaCookieName}=${req.query.unifiedJwt}; Path=/; Secure; HttpOnly; SameSite=Lax`)
-        .redirect(req.query.requestedUrl ?? (process.env.PUBLIC_URL || new URL('..', req.url).toString()))
+      void res.header('Set-Cookie', `${uaCookieName}=${req.query.unifiedJwt}; Path=/; Secure; HttpOnly; SameSite=Lax`)
+      void res.type('text/html')
+      return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="refresh" content="0; url=${htmlEncode(req.query.requestedUrl ?? (process.env.PUBLIC_URL || new URL('..', req.url).toString()))}">
+  <title>Logging in...</title>
+</head>
+<body>
+</body>
+</html>`
     }
   )
 
