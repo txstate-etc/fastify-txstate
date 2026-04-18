@@ -1,11 +1,14 @@
 {
   "compilerOptions": {
-    "target": "es2022",
-    "module": "commonjs",
+    "target": "es2024",
+    "module": "preserve",
+    "moduleResolution": "bundler",
     "declaration": true,
+    "rootDir": ".",
     "outDir": "./lib",
     "strict": true,
-    "esModuleInterop": true
+    "rewriteRelativeImportExtensions": true,
+    "skipLibCheck": true
   },
   "include": ["src"]
 }

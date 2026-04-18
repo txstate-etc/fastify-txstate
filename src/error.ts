@@ -1,5 +1,5 @@
 import type { ValidationMessage } from '@txstate-mws/fastify-shared'
-import type { FastifySchemaValidationError } from 'fastify/types/schema'
+import type { FastifySchemaValidationError } from 'fastify'
 import { getReasonPhrase } from 'http-status-codes'
 
 export class HttpError extends Error {
@@ -12,18 +12,6 @@ export class HttpError extends Error {
     }
     super(message)
     this.statusCode = statusCode
-  }
-}
-
-/**
- * @deprecated This response format is less flexible than the one based on the ValidationMessage
- * interface. Use ValidationError or ValidationErrors instead, and adjust the client to expect
- * the new format.
- */
-export class FailedValidationError extends HttpError {
-  constructor (public errors: Record<string, string[]>) {
-    super(422, 'Validation failure.')
-    this.errors = errors
   }
 }
 
@@ -41,5 +29,5 @@ export class ValidationErrors extends HttpError {
 
 export function fstValidationToMessage (v: FastifySchemaValidationError) {
   const instancePath = v.keyword === 'required' ? v.instancePath + '/' + (v.params.missingProperty as string) : v.instancePath
-  return { message: v.message, path: instancePath.substring(1).replace(/\//g, '.'), type: 'error' }
+  return { message: v.message, path: instancePath.substring(1).replace(/\//gv, '.'), type: 'error' }
 }

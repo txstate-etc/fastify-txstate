@@ -1,8 +1,8 @@
-import { createPublicKey, createSecretKey, type KeyObject, randomBytes } from 'crypto'
-import { type FastifyReply, type FastifyRequest } from 'fastify'
+import { createPublicKey, createSecretKey, type KeyObject, randomBytes } from 'node:crypto'
+import type { FastifyReply, FastifyRequest } from 'fastify'
 import { createRemoteJWKSet, decodeJwt, type JWTPayload, jwtVerify, type JWTVerifyGetKey, type JWTHeaderParameters, type JWK, importJWK } from 'jose'
 import { Cache, htmlEncode, isBlank, isNotBlank, toArray } from 'txstate-utils'
-import { type IssuerConfig, type FastifyInstanceTyped, type FastifyTxStateAuthInfo } from '.'
+import type { IssuerConfig, FastifyInstanceTyped, FastifyTxStateAuthInfo } from './index.ts'
 
 export interface IssuerConfigRaw extends Omit<IssuerConfig, 'validateUrl' | 'logoutUrl'> {
   validateUrl?: string
@@ -16,7 +16,7 @@ const issuerKeys = new Map<string, KeyLike>()
 const issuerConfig = new Map<string, IssuerConfig>()
 const trustedClients = new Set<string>()
 const uaCookieName = process.env.UA_COOKIE_NAME ?? randomBytes(16).toString('hex')
-const uaCookieNameRegex = new RegExp(`${uaCookieName}=([^;]+)`)
+const uaCookieNameRegex = new RegExp(`${uaCookieName}=([^;]+)`, 'v')
 const uaServiceUrl = isNotBlank(process.env.PUBLIC_URL) ? process.env.PUBLIC_URL + (process.env.PUBLIC_URL.endsWith('/') ? '' : '/') + '.uaService' : undefined
 
 const tokenCache = new Cache(async (token: string, req: FastifyRequest) => {
@@ -34,9 +34,9 @@ const tokenCache = new Cache(async (token: string, req: FastifyRequest) => {
       return undefined
     }
     return payload
-  } catch (e: any) {
+  } catch (e: unknown) {
     // squelch errors about bad tokens, we can already see the 401 in the log
-    if (e.code !== 'ERR_JWS_SIGNATURE_VERIFICATION_FAILED') req.log.error(e)
+    if ((e as { code?: string }).code !== 'ERR_JWS_SIGNATURE_VERIFICATION_FAILED') req.log.error(e)
     return undefined
   }
 }, { freshseconds: 3600 })
@@ -73,13 +73,13 @@ function processIssuerConfig (config: IssuerConfigRaw) {
   if (config.iss === 'unified-auth') {
     const validateUrl = isNotBlank(config.validateUrl)
       ? new URL(config.validateUrl, config.url)
-      : new URL('validateToken', config.url!)
+      : new URL('validateToken', config.url)
 
     const logoutUrl = isNotBlank(config.logoutUrl)
       ? new URL(config.logoutUrl, config.url)
       : isNotBlank(process.env.UA_URL)
         ? new URL(process.env.UA_URL + '/logout')
-        : new URL('logout', config.url!)
+        : new URL('logout', config.url)
 
     return {
       ...config,
@@ -112,7 +112,7 @@ function init () {
 }
 
 function tokenFromReq (req?: FastifyRequest): string | undefined {
-  const m = req?.headers.authorization?.match(/^bearer (.*)$/i)
+  const m = req?.headers.authorization?.match(/^bearer (.*)$/iv)
   if (m != null) return m[1]
 
   const m2 = req?.headers.cookie?.match(uaCookieNameRegex)
@@ -126,7 +126,6 @@ async function unifiedAuthenticateInternal (req: FastifyRequest): Promise<Fastif
   const payload = await tokenCache.get(token, req)
   if (!payload) return undefined
   await validateCache.get(token, payload)
-  req.token = token
   return {
     token,
     issuerConfig: payload.iss ? issuerConfig.get(payload.iss) : undefined,
@@ -134,7 +133,7 @@ async function unifiedAuthenticateInternal (req: FastifyRequest): Promise<Fastif
     sessionId: payload.sub! + '-' + payload.iat,
     sessionCreatedAt: payload.iat ? new Date(payload.iat * 1000) : undefined,
     clientId: payload.client_id as string | undefined,
-    impersonatedBy: (payload.act as any)?.sub as string | undefined,
+    impersonatedBy: (payload.act as { sub?: string } | undefined)?.sub,
     scope: payload.scope as string | undefined
   }
 }
@@ -162,9 +161,9 @@ export async function unifiedAuthenticate (req: FastifyRequest, options?: {
     options.optionalRoutes.add('/.uaLogout')
   }
   const isNoAuthenticationRoute = options?.exceptRoutes?.has(req.routeOptions.url!)
-  const requiresAuthenticationRoute = options?.authenticateAll &&
-    !options?.exceptRoutes?.has(req.routeOptions.url!) &&
-    !options?.optionalRoutes?.has(req.routeOptions.url!)
+  const requiresAuthenticationRoute = options?.authenticateAll
+    && !options.exceptRoutes?.has(req.routeOptions.url!)
+    && !options.optionalRoutes?.has(req.routeOptions.url!)
 
   if (requiresAuthenticationRoute && isBlank(auth?.username)) {
     throw new Error('Request requires authentication.')
@@ -285,6 +284,6 @@ export function registerUaCookieRoutes (app: FastifyInstanceTyped): void {
     const returnUrl = uaServiceUrl ?? new URL('.uaService', req.protocol + '://' + req.hostname).toString()
     loginUrl.searchParams.set('returnUrl', returnUrl)
     if (req.query.requestedUrl) loginUrl.searchParams.set('requestedUrl', req.query.requestedUrl)
-    return res.redirect(loginUrl.toString())
+    return await res.redirect(loginUrl.toString())
   })
 }

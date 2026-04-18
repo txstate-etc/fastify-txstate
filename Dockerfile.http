@@ -6,6 +6,5 @@ RUN npm install
 
 COPY src src
 COPY testserver testserver
-COPY testserver/tsconfig.json ./
 
-CMD [ "node", "-r", "ts-node/register", "--no-warnings", "--inspect=0.0.0.0", "testserver/index.ts" ]
+CMD [ "node", "--experimental-transform-types", "--no-warnings", "--inspect=0.0.0.0", "testserver/index.ts" ]

@@ -1,5 +1,5 @@
 import { Readable } from 'node:stream'
-import { ReadableStream, ReadableStreamDefaultReader } from 'node:stream/web'
+import { ReadableStream, type ReadableStreamDefaultReader } from 'node:stream/web'
 
 export interface FormDataTextField {
   name: string
@@ -42,24 +42,23 @@ export async function postFormData (url: string, fields: FormDataField[], header
           controller.enqueue(encoder.encode(chunk.header))
           part = 'content'
         } else if (part === 'content') {
-          const { value, done } = await chunk.contentReader.read()
-          if (done) part = 'footer'
-          else controller.enqueue(value)
-        } else if (part === 'footer') {
+          const result = await chunk.contentReader.read()
+          if (result.done) part = 'footer'
+          else controller.enqueue(result.value as Uint8Array)
+        } else {
           controller.enqueue(encoder.encode(chunk.footer))
-          i++
+          i += 1
           part = 'header'
         }
       }
     },
     cancel () {
       for (const chunk of chunks) {
-        if (chunk.contentReader.cancel) {
-          chunk.contentReader.cancel()
-        }
+        void chunk.contentReader.cancel()
       }
     }
   })
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- duplex and node ReadableStream aren't in standard RequestInit types
   return await fetch(url, {
     method: 'POST',
     headers,

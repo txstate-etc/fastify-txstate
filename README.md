@@ -1,9 +1,11 @@
 # fastify-txstate
 A small wrapper for fastify providing a set of common conventions &amp; utility functions we use.
 
+> **v4 upgrades to fastify 5 and drops CommonJS, among other things.** See the [changelog](https://github.com/txstate-etc/fastify-txstate/blob/master/CHANGELOG.md) for upgrade notes.
+
 # Basic Usage
 ```javascript
-const Server = require('fastify-txstate').default
+import Server from 'fastify-txstate'
 const server = new Server()
 server.app.get('/yourpath', async (req, res) => {
   return { hello: 'world' }
@@ -19,7 +21,7 @@ Some resources are available to make error handling easy.
 ## HttpError
 This class is available to throw simple errors while processing a request:
 ```javascript
-const { HttpError } = require('fastify-txstate')
+import { HttpError } from 'fastify-txstate'
 server.app.get('/yourpath', async (req, res) => {
   if (!req.params.id) throw new HttpError(400, 'Please provide an id.')
   /* ... */
@@ -65,7 +67,7 @@ server.addErrorHandler(async (err, req, res) => {
   }
 })
 ```
-In this case we only need custom error handling for a specific class of Error. Calling `res.send()` in your handler is how you signal that the error has been intercepted. If you do not call `res.send()`, the default error handling will kick in, so you can still throw `HttpError` or `FailedValidationError` and have them handled properly.
+In this case we only need custom error handling for a specific class of Error. Calling `res.send()` in your handler is how you signal that the error has been intercepted. If you do not call `res.send()`, the default error handling will kick in, so you can still throw `HttpError` or `ValidationErrors` and have them handled properly.
 
 You may call `addErrorHandler` multiple times; they will be executed in order and bail out when one calls `res.send()`.
 ## Opt-Out of Error Handling
@@ -102,6 +104,6 @@ We try to set up logging well by default, including things like the HTTP tracepa
 
 Development and production logs are different, based on the `NODE_ENV` environment variable. The development logger is designed to be extremely brief and not in JSON format, so that you can see errors clearly.
 
-If you want to manipulate the logging you can import the `devLogger` and `prodLogger` into your project, manipulate them, and pass them into the server constructor configuration.
+If you want to provide your own logger, you can pass a pino instance via the `loggerInstance` option in the server constructor configuration. The `devLogger` and `prodLogger` are also exported if you'd like to use them as a starting point.
 
 You can also simply add information to the `reply.extraLogInfo` object and it will automatically appear in the outgoing access log in production.

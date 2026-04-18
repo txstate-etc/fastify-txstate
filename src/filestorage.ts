@@ -1,9 +1,9 @@
-import { createHash } from 'crypto'
-import { createReadStream, createWriteStream } from 'fs'
-import { access, constants, mkdir, rename, unlink, stat } from 'fs/promises'
-import { dirname } from 'path'
-import { type Readable } from 'stream'
-import { pipeline } from 'stream/promises'
+import { createHash } from 'node:crypto'
+import { createReadStream, createWriteStream } from 'node:fs'
+import { access, constants, mkdir, rename, unlink, stat } from 'node:fs/promises'
+import { dirname } from 'node:path'
+import type { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import { rescue, randomid } from 'txstate-utils'
 
 export interface FileHandler {
@@ -52,7 +52,7 @@ export class FileSystemHandler implements FileHandler {
 
   async exists (checksum: string) {
     const filepath = this.#getFileLocation(checksum)
-    return (await rescue(access(filepath, constants.R_OK), false)) ?? true
+    return (await rescue(access(filepath, constants.R_OK), false)) !== false
   }
 
   async fileSize (checksum: string) {
@@ -78,7 +78,7 @@ export class FileSystemHandler implements FileHandler {
       const rereadhash = createHash('sha256')
       const read = createReadStream(tmp)
       for await (const chunk of read) {
-        rereadhash.update(chunk)
+        rereadhash.update(chunk as Buffer)
       }
       const rereadsum = rereadhash.digest('base64url')
       if (rereadsum !== checksum) throw new Error('File did not write to disk correctly. Please try uploading again.')
@@ -94,9 +94,10 @@ export class FileSystemHandler implements FileHandler {
     const filepath = this.#getFileLocation(checksum)
     try {
       await unlink(filepath)
-    } catch (e: any) {
-      if (e.code === 'ENOENT') console.warn('Tried to delete file with checksum', checksum, 'but it did not exist.')
-      else console.warn(e)
+    } catch (e: unknown) {
+      const err = e as NodeJS.ErrnoException
+      if (err.code === 'ENOENT') return // file already gone, nothing to do
+      throw e
     }
   }
 }

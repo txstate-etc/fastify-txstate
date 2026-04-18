@@ -1,8 +1,7 @@
-/* eslint-disable @typescript-eslint/no-redeclare */
 import fastifyMultipart from '@fastify/multipart'
-import { type FromSchema } from 'json-schema-to-ts'
+import type { FromSchema } from 'json-schema-to-ts'
 import { isBlank } from 'txstate-utils'
-import Server, { FormDataField, HttpError, analyticsPlugin, postFormData, registerUaCookieRoutes, requireCookieAuth, unifiedAuthenticate } from '../src'
+import Server, { type FormDataField, HttpError, analyticsPlugin, postFormData, registerUaCookieRoutes, requireCookieAuth, unifiedAuthenticate } from '../src/index.ts'
 
 class CustomError extends Error {}
 
@@ -48,9 +47,7 @@ server.swagger().then(async () => {
   await server.app.register(analyticsPlugin, { appName: 'testserver' })
   await server.app.register(fastifyMultipart)
 
-  server.app.get('/test', async (req, res) => {
-    return { hello: 'world' }
-  })
+  server.app.get('/test', async (req, res) => ({ hello: 'world' }))
   server.app.get('/403', async (req, res) => {
     throw new HttpError(403, 'Not Authorized')
   })
@@ -67,23 +64,15 @@ server.swagger().then(async () => {
     await res.send('OK')
     await server.close(5000)
   })
-  server.app.get('/proxy', async (req, res) => {
-    return { protocol: req.protocol, hostname: req.hostname }
-  })
+  server.app.get('/proxy', async (req, res) => ({ protocol: req.protocol, host: req.host, hostname: req.hostname }))
   server.app.get('/logging', async (req, res) => {
     res.extraLogInfo = { hello: 'world' }
     return { success: true }
   })
-  server.app.post<{ Body: TypedInputRecursive }>('/typed', { schema: { body: typedInputRecursive, response: { 200: { type: 'string' } } } }, (req, res) => {
-    return req.body.str
-  })
-  server.app.post<{ Body: TypedInputRecursive }>('/numtyped', { schema: { body: typedInputRecursive, response: { 200: { type: 'object', properties: { num: { type: 'number' } } } } } }, (req, res) => {
-    return { num: req.body.num }
-  })
-  server.app.post<{ Body: TypedInputRecursive }>('/badtyped', { schema: { body: typedInputRecursive, response: { 200: { type: 'integer' } } } }, (req, res) => {
-    return 5.5
-  })
-  server.app.post('/datetime', { schema: { body: { type: 'object', properties: { mydate: { type: 'string', format: 'date-time' } }, required: ['mydate'], additionalProperties: false }, response: { 200: { type: 'object', properties: { yourdate: { type: 'string', format: 'date-time' } } } } } }, (req, res) => {
+  server.app.post<{ Body: TypedInputRecursive }>('/typed', { schema: { body: typedInputRecursive, response: { 200: { type: 'string' } } } }, (req, res) => req.body.str)
+  server.app.post<{ Body: TypedInputRecursive }>('/numtyped', { schema: { body: typedInputRecursive, response: { 200: { type: 'object', properties: { num: { type: 'number' } } } } } }, (req, res) => ({ num: req.body.num }))
+  server.app.post<{ Body: TypedInputRecursive }>('/badtyped', { schema: { body: typedInputRecursive, response: { 200: { type: 'integer' } } } }, (req, res) => 5.5)
+  server.app.post<{ Body: { mydate: string } }>('/datetime', { schema: { body: { type: 'object', properties: { mydate: { type: 'string', format: 'date-time' } }, required: ['mydate'], additionalProperties: false }, response: { 200: { type: 'object', properties: { yourdate: { type: 'string', format: 'date-time' } } } } } }, (req, res) => {
     const date = new Date(req.body.mydate)
     return { yourdate: date.toISOString() }
   })
@@ -121,5 +110,5 @@ server.swagger().then(async () => {
     }
   })
 })
-  .then(async () => server.start())
-  .catch(e => { console.error(e) })
+  .then(async () => { await server.start() })
+  .catch((e: unknown) => { console.error(e) })

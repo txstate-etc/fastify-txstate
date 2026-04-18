@@ -1,10 +1,10 @@
-import Elasticsearch from '@elastic/elasticsearch'
+import { Client as ElasticsearchClient } from '@elastic/elasticsearch'
 import { interactionEvent, type InteractionEvent } from '@txstate-mws/fastify-shared'
 import type { FastifyBaseLogger, FastifyInstance, FastifyRequest } from 'fastify'
-import type { IncomingHttpHeaders } from 'http'
-import { Cache, isBlank, pick } from 'txstate-utils'
+import type { IncomingHttpHeaders } from 'node:http'
+import { Cache, isBlank, omit, pick } from 'txstate-utils'
 import { type IBrowser, UAParser, type IDevice, type IOS } from 'ua-parser-js'
-import { HttpError, type FastifyTxStateAuthInfo } from '.'
+import { HttpError, type FastifyTxStateAuthInfo } from './index.ts'
 
 export interface StoredInteractionEvent extends InteractionEvent {
   '@timestamp': string
@@ -29,7 +29,7 @@ export interface StoredInteractionEvent extends InteractionEvent {
 
     // The value of the _ga cookie, if set. This is the domain wide tracking cookie Google Analytics sets. It's useful for tracking the browser/device.
     ga?: string
-  } & FastifyTxStateAuthInfo
+  } & Partial<FastifyTxStateAuthInfo> & { username: string }
 }
 
 interface QueuedEventItem {
@@ -38,12 +38,12 @@ interface QueuedEventItem {
   gaCookie: string
   remoteIp: string
   time: string
-  auth: any
+  auth: Partial<FastifyTxStateAuthInfo> & { username: string }
 }
 
 export class AnalyticsClient {
   async push (events: StoredInteractionEvent[]) {
-    for (const event of events) console.info('analytics event:', JSON.stringify(pick(event, 'eventType', 'screen', 'action', 'target')))
+    for (const event of events) console.info('analytics event:', JSON.stringify(pick(event, 'eventType', 'screen', 'action', 'target'))) // eslint-disable-line no-console -- intentional dev fallback
   }
 }
 
@@ -55,11 +55,12 @@ export class LoggingAnalyticsClient extends AnalyticsClient {
 }
 
 export class ElasticAnalyticsClient extends AnalyticsClient {
-  private readonly elasticClient: Elasticsearch.Client
+  private readonly elasticClient: ElasticsearchClient
+  private userEventsIndex = process.env.ELASTICSEARCH_USEREVENTS_INDEX ?? 'interaction-analytics'
 
   constructor () {
     super()
-    this.elasticClient = new Elasticsearch.Client({
+    this.elasticClient = new ElasticsearchClient({
       node: process.env.ELASTICSEARCH_URL,
       auth: {
         username: process.env.ELASTICSEARCH_USER ?? 'elastic',
@@ -69,7 +70,11 @@ export class ElasticAnalyticsClient extends AnalyticsClient {
   }
 
   async push (events: StoredInteractionEvent[]) {
-    if (events.length) await this.elasticClient.bulk({ body: events.reduce<any>((acc, event) => { acc.push({ index: { _index: process.env.ELASTICSEARCH_USEREVENTS_INDEX ?? 'interaction-analytics' } }, event); return acc }, []) })
+    if (events.length) {
+      await this.elasticClient.bulk({ body: events.reduce<({ index: { _index: string } } | StoredInteractionEvent)[]>((acc, event) => {
+        acc.push({ index: { _index: this.userEventsIndex } }, event); return acc
+      }, []) })
+    }
   }
 }
 
@@ -119,21 +124,21 @@ export function analyticsPlugin (fastify: FastifyInstance, opts: { appName: stri
       if (eventsToStore.length) await analyticsClient.push(eventsToStore)
     } catch (e) {
       eventQueue.push(...eventQueueSlice)
-      console.error(e)
+      console.error(e) // eslint-disable-line no-console -- no logger available in this context
     } finally {
       setTimeout(() => { void flushQueue() }, 5000)
     }
   }
   setTimeout(() => { void flushQueue() }, 5000)
 
-  function queueEvents (auth: any, headers: IncomingHttpHeaders, remoteIp: string, events: InteractionEvent[]) {
+  function queueEvents (auth: Partial<FastifyTxStateAuthInfo> & { username: string }, headers: IncomingHttpHeaders, remoteIp: string, events: InteractionEvent[]) {
     for (const event of events) {
       eventQueue.push({
         event,
         remoteIp,
         ua: headers['user-agent'] ?? '',
         time: new Date().toISOString(),
-        gaCookie: headers.cookie?.replace(/^.*?(?:_ga=([^;]+))?.*$/, '$1') ?? '',
+        gaCookie: headers.cookie?.replace(/^.*?(?:_ga=([^;]+))?.*$/v, '$1') ?? '',
         auth
       })
     }
@@ -142,7 +147,7 @@ export function analyticsPlugin (fastify: FastifyInstance, opts: { appName: stri
   fastify.post<{ Body: InteractionEvent[] }>('/analytics', { schema: { body: { type: 'array', items: interactionEvent }, response: { 202: { type: 'string', enum: ['OK'] } } } }, async (req, res) => {
     const { auth } = req
     if (opts.authorize && !opts.authorize(req)) throw new HttpError(401)
-    queueEvents(auth ?? { username: 'unauthenticated' }, req.headers, req.ip, req.body)
+    queueEvents(auth ? omit(auth, 'issuerConfig', 'token') : { username: 'unauthenticated' }, req.headers, req.ip, req.body)
     res.statusCode = 202
     return 'OK'
   })

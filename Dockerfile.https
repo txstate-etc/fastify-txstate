@@ -9,6 +9,5 @@ RUN npm install
 COPY --from=keygen /securekeys /securekeys
 COPY src src
 COPY testserver testserver
-COPY testserver/tsconfig.json ./
 
-CMD [ "node", "-r", "ts-node/register", "--no-warnings", "testserver/index.ts" ]
+CMD [ "node", "--experimental-transform-types", "--no-warnings", "testserver/index.ts" ]

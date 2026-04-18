@@ -6,4 +6,4 @@ RUN npm install
 
 COPY test test
 
-CMD [ "npm", "run", "mocha" ]
+CMD [ "npm", "run", "nodetest" ]

@@ -1,19 +1,20 @@
-import Ajv from 'ajv'
+import Ajv, { type Plugin } from 'ajv'
 import swagger, { type FastifyDynamicSwaggerOptions } from '@fastify/swagger'
 import swaggerUI, { type FastifySwaggerUiOptions } from '@fastify/swagger-ui'
 import type { JsonSchemaToTsProvider } from '@fastify/type-provider-json-schema-to-ts'
 import { validatedResponse } from '@txstate-mws/fastify-shared'
 import ajvErrors from 'ajv-errors'
 import ajvFormats from 'ajv-formats'
-import { type FastifyInstance, type FastifyRequest, type FastifyReply, type FastifyServerOptions, fastify, type FastifyLoggerOptions, type FastifyBaseLogger, type RawServerDefault, type FastifySchema } from 'fastify'
-import { type FastifySchemaValidationError } from 'fastify/types/schema'
+import { type FastifyInstance, type FastifyRequest, type FastifyReply, type FastifyServerOptions, type FastifyError, fastify, type FastifyBaseLogger, type RawServerDefault, type FastifySchema, type FastifySchemaValidationError } from 'fastify'
 import type { JSONSchema } from 'json-schema-to-ts'
 import fs from 'node:fs'
+import pino from 'pino'
 import http from 'node:http'
+import { Writable } from 'node:stream'
 import type http2 from 'node:http2'
 import type { OpenAPIV3 } from 'openapi-types'
 import { clone, destroyNulls, isBlank, omit, set, sleep, stringifyDates, toArray } from 'txstate-utils'
-import { FailedValidationError, HttpError, ValidationError, ValidationErrors, fstValidationToMessage } from './error'
+import { HttpError, ValidationError, ValidationErrors, fstValidationToMessage } from './error.ts'
 
 type ErrorHandler = (error: Error, req: FastifyRequest, res: FastifyReply) => Promise<void>
 
@@ -125,53 +126,61 @@ export interface FastifyTxStateOptions extends Partial<FastifyServerOptions> {
 declare module 'fastify' {
   interface FastifyRequest {
     auth?: FastifyTxStateAuthInfo
-    /**
-     * @deprecated Use `req.auth.token` instead. Just trying to keep everything contained.
-     * This will be removed in the next major version.
-     */
-    token?: string
   }
   interface FastifyReply {
     extraLogInfo: any
   }
 }
 
-export const devLogger = {
-  level: 'info',
-  info: (msg: any) => { console.info(msg.req ? `${msg.req.method} ${msg.req.url}` : msg.res ? `${msg.res.statusCode} - ${msg.responseTime}` : msg) },
-  error: console.error,
-  debug: console.debug,
-  fatal: console.error,
-  warn: console.warn,
-  trace: console.trace,
-  silent: (msg: any) => {},
-  child (bindings: any, options?: any) { return this }
+interface PinoLogEntry {
+  req?: { method: string, url: string }
+  res?: { statusCode: number }
+  responseTime?: number
+  err?: unknown
+  msg?: string
 }
 
-export const prodLogger: FastifyLoggerOptions = {
+/* eslint-disable no-console -- devLogger intentionally writes to console */
+export const devLogger = pino({
+  level: 'info'
+}, new Writable({
+  write (chunk: Buffer, _encoding: string, callback: () => void) {
+    const obj = JSON.parse(String(chunk)) as PinoLogEntry
+    if (obj.req) console.info(`${obj.req.method} ${obj.req.url}`)
+    else if (obj.res) console.info(`${obj.res.statusCode} - ${obj.responseTime}`)
+    else if (obj.err) console.error(obj.err)
+    else console.info(obj.msg || obj)
+    callback()
+  }
+}))
+/* eslint-enable no-console */
+
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call -- pino serializer params are typed as any */
+export const prodLogger = pino({
   level: 'info',
   serializers: {
-    req (req) {
+    req (req: any) {
       return {
         method: req.method,
-        url: req.url.replace(/(token|unifiedJwt)=[\w.]+/i, '$1=redacted'),
+        url: req.url.replace(/(?<param>token|unifiedJwt)=[\w.]+/iv, '$<param>=redacted'),
         remoteAddress: req.ip,
         traceparent: req.headers.traceparent
       }
     },
-    res (res) {
+    res (res: any) {
       return {
         statusCode: res.statusCode,
-        url: res.request?.url.replace(/(token|unifiedJwt)=[\w.]+/i, '$1=redacted'),
+        url: res.request?.url.replace(/(?<param>token|unifiedJwt)=[\w.]+/iv, '$<param>=redacted'),
         length: Number(toArray(res.getHeader?.('content-length'))[0]),
         ...res.extraLogInfo,
         auth: omit(res.request?.auth ?? res.extraLogInfo?.auth ?? {}, 'token', 'issuerConfig')
       }
     }
   }
-}
+})
+/* eslint-enable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call */
 
-export type FastifyInstanceTyped = FastifyInstance<RawServerDefault, http.IncomingMessage, http.ServerResponse<http.IncomingMessage>, FastifyBaseLogger, JsonSchemaToTsProvider>
+export type FastifyInstanceTyped = FastifyInstance<RawServerDefault, http.IncomingMessage, http.ServerResponse, FastifyBaseLogger, JsonSchemaToTsProvider>
 export type TxServer = Server
 export default class Server {
   protected https = false
@@ -205,8 +214,8 @@ export default class Server {
       this.https = false
       delete config.https
     }
-    if (typeof config.logger === 'undefined') {
-      config.logger = process.env.NODE_ENV === 'development'
+    if (typeof config.logger === 'undefined' && !config.loggerInstance) {
+      config.loggerInstance = process.env.NODE_ENV === 'development'
         ? devLogger
         : prodLogger
     }
@@ -214,19 +223,18 @@ export default class Server {
       if (['true', '1'].includes(process.env.TRUST_PROXY)) config.trustProxy = true
       else config.trustProxy = process.env.TRUST_PROXY
     }
-    config.ajv = { ...config.ajv, plugins: [...(config.ajv?.plugins ?? []), ajvErrors, [ajvFormats, { mode: 'fast' }]], customOptions: { ...config.ajv?.customOptions, allErrors: true, strictSchema: false, coerceTypes: true } }
-
+    config.ajv = { ...config.ajv, mode: undefined, plugins: [...(config.ajv?.plugins ?? []), ajvErrors as Plugin<unknown>, [ajvFormats as Plugin<unknown>, { mode: 'fast' }]], customOptions: { ...config.ajv?.customOptions, allErrors: true, strictSchema: false, coerceTypes: true } }
     this.healthCallback = config.checkHealth
     this.app = fastify(config)
     this.app.addHook('onRoute', route => {
       if (!route.schema?.body) return
-      const missingResponse = route.schema?.response == null
+      const missingResponse = route.schema.response == null
       const response400 = set(validatedResponse.properties.messages, 'description', 'Basic validation failure. This means that the UI provided input that failed validation as defined in the openapi specification published by the API. The UI is at fault and should be re-coded to avoid sending invalid data.')
       let newSchema = set<Record<string, any>>(route.schema ?? {}, 'response.400', response400)
       const response422 = set(validatedResponse, 'description', 'Validation failure. This means that the user provided an invalid object. The user should be shown their error so that they can correct it.')
       newSchema = set(newSchema, 'response.422', response422)
       if (missingResponse) {
-        newSchema.response['200'] = {
+        newSchema.response['200'] = { // eslint-disable-line @typescript-eslint/no-unsafe-member-access -- response is typed as any from set()
           description: 'Success. Return type has not been specified.',
           type: 'object'
         }
@@ -245,11 +253,11 @@ export default class Server {
     const ajv = new Ajv(config.ajv.customOptions)
     for (const pluginConfig of config.ajv.plugins ?? []) {
       const [plugin, opts] = toArray(pluginConfig)
-      plugin(ajv, opts)
+      plugin(ajv, opts) // eslint-disable-line @typescript-eslint/no-unsafe-call -- plugin type comes from fastify's ajv config
     }
-    this.app.setSerializerCompiler((route) => {
+    this.app.setSerializerCompiler(route => {
       const schema: JSONSchema | undefined = route.schema
-      const validate = schema == null ? ajv.compile({ type: 'object' }) : ajv.compile(schema)
+      const validate = schema == null ? ajv.compile({ type: 'object' }) : ajv.compile(schema) // eslint-disable-line @typescript-eslint/no-unnecessary-condition -- schema can be undefined at runtime
       return data => {
         /**
          * Ajv unfortunately treats optional properties as non-nullable, so they're allowed to
@@ -257,7 +265,7 @@ export default class Server {
          * to empty string or 0 or false. This is silly behavior, so we're converting all nulls to
          * undefined before we validate.
          */
-        if (schema != null) destroyNulls(stringifyDates(data))
+        if (schema != null) destroyNulls(stringifyDates(data)) // eslint-disable-line @typescript-eslint/no-unnecessary-condition -- schema can be undefined at runtime
         if (!validate(data)) throw new Error('Output validation failed. ' + validate.errors?.[0].instancePath + ': ' + validate.errors?.[0].message)
         return JSON.stringify(data)
       }
@@ -278,7 +286,7 @@ export default class Server {
         if (!passed && req.headers.origin === 'null') passed = process.env.NODE_ENV === 'development'
         else if (!passed) {
           const parsedOrigin = new URL(req.headers.origin)
-          if (req.hostname.replace(/:\d+$/, '') === parsedOrigin.hostname) passed = true
+          if (req.hostname === parsedOrigin.hostname) passed = true
           if (this.validOriginHosts[parsedOrigin.hostname]) passed = true
 
           if (!passed && this.validOriginSuffixes.size > 0) {
@@ -292,7 +300,7 @@ export default class Server {
         if (!passed && config.checkOrigin?.(req)) passed = true
         if (!passed) {
           await res.status(403).send('Origin check failed. Suspected XSRF attack.')
-          return res
+          return await res
         } else {
           void res.header('Access-Control-Allow-Origin', req.headers.origin)
           void res.header('Access-Control-Max-Age', '600') // ask browser to skip pre-flights for 10 minutes after a yes
@@ -313,12 +321,12 @@ export default class Server {
         DELETE: true
       }
       this.app.addHook('onRequest', async (req, res) => {
-        if (!authenticatedMethods[req.method] || isBlank(req.routeOptions.url) || req.routeOptions.url === '/health' || req.routeOptions.url === '/.uaService' || (this.swaggerEndpoint && req.routeOptions.url?.startsWith(this.swaggerEndpoint))) return
+        if (!authenticatedMethods[req.method] || isBlank(req.routeOptions.url) || req.routeOptions.url === '/health' || req.routeOptions.url === '/.uaService' || (this.swaggerEndpoint && req.routeOptions.url.startsWith(this.swaggerEndpoint))) return
         try {
           req.auth = await config.authenticate!(req)
         } catch (e: any) {
           await res.status(401).send('Failed to authenticate.')
-          return res
+          return await res
         }
       })
     }
@@ -333,15 +341,13 @@ export default class Server {
         if (resp.getHeader('content-type') === 'text/html') void resp.type('text/html; charset=utf-8')
       })
     this.app.setNotFoundHandler((req, res) => { void res.status(404).send('Not Found.') })
-    this.app.setErrorHandler(async (err, req, res) => {
+    this.app.setErrorHandler(async (err: FastifyError, req, res) => {
       req.log.warn(err)
       for (const errorHandler of this.errorHandlers) {
         if (!res.sent) await errorHandler(err, req, res)
       }
       if (!res.sent) {
-        if (err instanceof FailedValidationError) {
-          await res.status(err.statusCode).send(err.errors)
-        } else if (err instanceof ValidationError) {
+        if (err instanceof ValidationError) {
           await res.status(err.statusCode).send({ success: false, messages: [{ message: err.message, path: err.path, type: err.type ?? 'error' }] })
         } else if (err instanceof ValidationErrors) {
           await res.status(err.statusCode).send({ success: false, messages: err.errors })
@@ -357,11 +363,9 @@ export default class Server {
                 else if (ov.keyword === 'required') userErrors.push({ ...ov, message: 'This field is required.' })
                 else userErrors.push({ ...ov, message: v.message })
               }
-            } else {
-              if (['type', 'additionalProperties', 'minProperties'].includes(v.keyword)) developerErrors.push(v)
-              else if (v.keyword === 'required') userErrors.push({ ...v, message: 'This field is required.' })
-              else userErrors.push(v)
-            }
+            } else if (['type', 'additionalProperties', 'minProperties'].includes(v.keyword)) developerErrors.push(v)
+            else if (v.keyword === 'required') userErrors.push({ ...v, message: 'This field is required.' })
+            else userErrors.push(v)
           }
           if (userErrors.length) await res.status(422).send({ success: false, messages: userErrors.map(fstValidationToMessage) })
           else await res.status(400).send(developerErrors.map(fstValidationToMessage))
@@ -395,22 +399,22 @@ export default class Server {
     this.sigHandler = () => {
       this.close().then(() => {
         process.exit()
-      }).catch(e => { console.error(e) })
+      }).catch((e: unknown) => { this.app.log.error(e, 'Error during shutdown') })
     }
     process.on('SIGTERM', this.sigHandler)
     process.on('SIGINT', this.sigHandler)
   }
 
   public async start (port?: number) {
-    const customPort = port ?? parseInt(process.env.PORT ?? '0')
+    const customPort = port ?? parseInt(process.env.PORT ?? '0', 10)
     await this.app.ready()
-    this.app.swagger?.()
+    if (this.swaggerEndpoint) this.app.swagger()
     if (customPort) {
       await this.app.listen({ port: customPort, host: '0.0.0.0' })
     } else if (this.https) {
       // redirect 80 to 443
       http.createServer((req, res) => {
-        res.writeHead(301, { Location: 'https://' + (req?.headers?.host?.replace(/:\d+$/, '') ?? '') + (req.url ?? '') })
+        res.writeHead(301, { Location: 'https://' + (req.headers.host?.replace(/:\d+$/v, '') ?? '') + (req.url ?? '') })
         res.end()
       }).listen(80)
       await this.app.listen({ port: 443, host: '0.0.0.0' })
@@ -441,7 +445,7 @@ export default class Server {
 
   public setValidOriginSuffixes (suffixes: string[]) {
     this.validOriginSuffixes.clear()
-    for (const s of suffixes) this.validOriginSuffixes.add(s.replace(/^\./, ''))
+    for (const s of suffixes) this.validOriginSuffixes.add(s.replace(/^\./v, ''))
   }
 
   public async swagger (opts?: { path?: string, openapi?: FastifyDynamicSwaggerOptions['openapi'], ui?: FastifySwaggerUiOptions }) {
@@ -460,6 +464,7 @@ this is log into this application and use dev tools to pull your token from the 
       // Apply the security globally to all operations
       openapi.security = [{ unifiedAuth: [] }]
     }
+    /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-return -- findRefs traverses arbitrary JSON schema objects */
     function findRefs (obj: Record<string, any> | null | undefined, id?: string) {
       if (obj == null) return undefined
       if (obj.$id?.length) id = obj.$id
@@ -481,12 +486,13 @@ this is log into this application and use dev tools to pull your token from the 
         return { ...transformArgs, schema: newSchema as FastifySchema }
       }
     })
+    /* eslint-enable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-return */
     this.swaggerEndpoint = opts?.path ?? opts?.ui?.routePrefix ?? '/docs'
     await this.app.register(swaggerUI, { ...opts?.ui, routePrefix: this.swaggerEndpoint })
   }
 
   public async close (softSeconds?: number) {
-    if (typeof softSeconds === 'undefined') softSeconds = parseInt(process.env.LOAD_BALANCE_TIMEOUT ?? '0')
+    if (typeof softSeconds === 'undefined') softSeconds = parseInt(process.env.LOAD_BALANCE_TIMEOUT ?? '0', 10)
     process.removeListener('SIGTERM', this.sigHandler)
     process.removeListener('SIGINT', this.sigHandler)
     if (softSeconds) {
@@ -497,8 +503,8 @@ this is log into this application and use dev tools to pull your token from the 
   }
 }
 
-export * from './analytics'
-export * from './error'
-export * from './filestorage'
-export * from './unified-auth'
-export * from './postformdata'
+export * from './analytics.ts'
+export * from './error.ts'
+export * from './filestorage.ts'
+export * from './unified-auth.ts'
+export * from './postformdata.ts'
