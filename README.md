@@ -92,9 +92,18 @@ During this period, `/health` will return HTTP 503, but all other requests will 
 # Origin Checking
 To help prevent XSRF attacks, we automatically reject requests that send an origin header that doesn't match the host (sub)domain. Only domain is compared, not protocol or port. This is especially helpful in large organizations where untrusted web sites run under different subdomains. SameSite cookies can help with attacks from other domains, but attacks on the same subdomain can still succeed.
 
-You can authorize more subdomains with the `validOriginHosts` configuration option, or by setting the `VALID_ORIGIN_HOSTS` environment variable. You can authorize subdomains at runtime with `server.setValidOriginHosts(hosts: string[])`.
+There are several ways to allow additional origins. Each is available as a constructor config option, an environment variable (comma-separated), and a runtime setter:
 
-You can disable these origin checks entirely with the `skipOriginCheck` configuration or `SKIP_ORIGIN_CHECK` environment variable.
+| Config | Env Var | Runtime | Match behavior |
+|--------|---------|---------|----------------|
+| `validOrigins` | `VALID_ORIGINS` | `server.setValidOrigins(origins)` | Exact origin match including scheme and port (e.g. `https://app.example.com`) |
+| `validOriginHosts` | `VALID_ORIGIN_HOSTS` | `server.setValidOriginHosts(hosts)` | Hostname match, ignoring scheme and port (e.g. `app.example.com`) |
+| `validOriginSuffixes` | `VALID_ORIGIN_SUFFIXES` | `server.setValidOriginSuffixes(suffixes)` | Domain suffix match — allows any subdomain (e.g. `example.com` allows `foo.example.com`, `bar.baz.example.com`) |
+| `checkOrigin` | — | — | Custom function `(req) => boolean` for arbitrary logic. Runs after the other checks; return true to allow. |
+
+All methods are additive — an origin is allowed if it passes any check.
+
+You can disable origin checks entirely with the `skipOriginCheck` configuration or `SKIP_ORIGIN_CHECK` environment variable.
 
 # Reverse Proxy
 If your application is behind a reverse proxy, you'll want to set the `trustProxy` configuration to true so that variables like `request.protocol` get set correctly. You can also set the `TRUST_PROXY` environment variable. `true` or `1` will translate to `{ trustProxy: true }`; anything else will be passed unchanged as a string.
