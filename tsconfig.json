@@ -1,10 +1,10 @@
 {
   "compilerOptions": {
     "target": "es2024",
-    "module": "preserve",
-    "moduleResolution": "bundler",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
     "declaration": true,
-    "rootDir": ".",
+    "rootDir": "./src",
     "outDir": "./lib",
     "strict": true,
     "rewriteRelativeImportExtensions": true,

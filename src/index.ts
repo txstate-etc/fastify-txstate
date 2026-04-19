@@ -1,4 +1,4 @@
-import Ajv, { type Plugin } from 'ajv'
+import { Ajv, type Plugin } from 'ajv'
 import swagger, { type FastifyDynamicSwaggerOptions } from '@fastify/swagger'
 import swaggerUI, { type FastifySwaggerUiOptions } from '@fastify/swagger-ui'
 import type { JsonSchemaToTsProvider } from '@fastify/type-provider-json-schema-to-ts'
@@ -285,7 +285,7 @@ export default class Server {
       if (['true', '1'].includes(process.env.TRUST_PROXY)) config.trustProxy = true
       else config.trustProxy = process.env.TRUST_PROXY
     }
-    config.ajv = { ...config.ajv, mode: undefined, plugins: [...(config.ajv?.plugins ?? []), ajvErrors as Plugin<unknown>, [ajvFormats as Plugin<unknown>, { mode: 'fast' }]], customOptions: { ...config.ajv?.customOptions, allErrors: true, strictSchema: false, coerceTypes: true } }
+    config.ajv = { ...config.ajv, mode: undefined, plugins: [...(config.ajv?.plugins ?? []), ajvErrors as unknown as Plugin<unknown>, [ajvFormats as unknown as Plugin<unknown>, { mode: 'fast' }]], customOptions: { ...config.ajv?.customOptions, allErrors: true, strictSchema: false, coerceTypes: true } }
     this.healthCallback = config.checkHealth
     this.app = fastify(config)
     this.app.addHook('onRoute', route => {
