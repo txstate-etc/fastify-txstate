@@ -1,7 +1,7 @@
 import fastifyMultipart from '@fastify/multipart'
 import type { FromSchema } from 'json-schema-to-ts'
 import { isBlank } from 'txstate-utils'
-import Server, { type FormDataField, HttpError, analyticsPlugin, postFormData, registerUaCookieRoutes, requireCookieAuth, unifiedAuthenticate } from '../src/index.ts'
+import Server, { type FormDataField, HttpError, analyticsPlugin, fileHandler, postFormData, registerUaCookieRoutes, requireCookieAuth, unifiedAuthenticate } from '../src/index.ts'
 
 class CustomError extends Error {}
 
@@ -46,6 +46,7 @@ export type TypedInputRecursive = TypedInput & { more?: TypedInputRecursive[] }
 server.swagger().then(async () => {
   await server.app.register(analyticsPlugin, { appName: 'testserver' })
   await server.app.register(fastifyMultipart)
+  await fileHandler.init()
 
   server.app.get('/test', async (req, res) => ({ hello: 'world' }))
   server.app.get('/403', async (req, res) => {
@@ -108,6 +109,22 @@ server.swagger().then(async () => {
     } else {
       throw new HttpError(400, 'Expected multipart/form-data')
     }
+  })
+  server.app.post('/filestorage/upload', async (req, res) => {
+    const results = []
+    for await (const part of req.parts()) {
+      if (part.type === 'file') {
+        const { checksum, size } = await fileHandler.put(part.file)
+        results.push({ checksum, size, filename: part.filename })
+      }
+    }
+    return results
+  })
+  server.app.get<{ Params: { checksum: string } }>('/filestorage/download/:checksum', async (req, res) => {
+    const { checksum } = req.params
+    if (!(await fileHandler.exists(checksum))) throw new HttpError(404, 'File not found')
+    const stream = fileHandler.get(checksum)
+    return await res.send(stream)
   })
 })
   .then(async () => { await server.start() })

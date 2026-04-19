@@ -410,6 +410,56 @@ describe('fastify-txstate', () => {
     })
   })
 
+  describe('file storage', () => {
+    it('should upload a file and return its checksum and size', async () => {
+      const fileContent = Buffer.from('hello world file storage test')
+      const formData = new FormData()
+      formData.append('file', new Blob([fileContent], { type: 'text/plain' }), 'test.txt')
+      const resp = await client.post('/filestorage/upload', formData)
+      expect(resp.data).to.be.an('array').with.lengthOf(1)
+      expect(resp.data[0].checksum).to.be.a('string')
+      expect(resp.data[0].size).to.equal(fileContent.length)
+      expect(resp.data[0].filename).to.equal('test.txt')
+    })
+    it('should download a previously uploaded file', async () => {
+      const fileContent = Buffer.from('download test content')
+      const formData = new FormData()
+      formData.append('file', new Blob([fileContent], { type: 'text/plain' }), 'download.txt')
+      const uploadResp = await client.post('/filestorage/upload', formData)
+      const checksum = uploadResp.data[0].checksum
+      const downloadResp = await client.get(`/filestorage/download/${checksum}`, { responseType: 'arraybuffer' })
+      expect(Buffer.from(downloadResp.data).toString()).to.equal('download test content')
+    })
+    it('should return 404 for a non-existent checksum', async () => {
+      try {
+        await client.get('/filestorage/download/nonexistentchecksum')
+        expect.fail('should have thrown')
+      } catch (e: any) {
+        expect(e.response.status).to.equal(404)
+      }
+    })
+    it('should deduplicate identical files by checksum', async () => {
+      const fileContent = Buffer.from('identical content for dedup test')
+      const formData1 = new FormData()
+      formData1.append('file', new Blob([fileContent], { type: 'text/plain' }), 'file1.txt')
+      const resp1 = await client.post('/filestorage/upload', formData1)
+      const formData2 = new FormData()
+      formData2.append('file', new Blob([fileContent], { type: 'text/plain' }), 'file2.txt')
+      const resp2 = await client.post('/filestorage/upload', formData2)
+      expect(resp1.data[0].checksum).to.equal(resp2.data[0].checksum)
+      expect(resp1.data[0].filename).to.equal('file1.txt')
+      expect(resp2.data[0].filename).to.equal('file2.txt')
+    })
+    it('should handle uploading multiple files at once', async () => {
+      const formData = new FormData()
+      formData.append('file1', new Blob([Buffer.from('first file')], { type: 'text/plain' }), 'first.txt')
+      formData.append('file2', new Blob([Buffer.from('second file')], { type: 'text/plain' }), 'second.txt')
+      const resp = await client.post('/filestorage/upload', formData)
+      expect(resp.data).to.be.an('array').with.lengthOf(2)
+      expect(resp.data[0].checksum).to.not.equal(resp.data[1].checksum)
+    })
+  })
+
   describe('postFormData', () => {
     it('should post file data', async () => {
       const fileData = Buffer.from('JVBERi0xLjQKMSAwIG9iago8PC9UeXBlIC9DYXRhbG9nCi9QYWdlcyAyIDAgUgo+PgplbmRvYmoK MiAwIG9iago8PC9UeXBlIC9QYWdlcwovS2lkcyBbMyAwIFJdCi9Db3VudCAxCj4+CmVuZG9iagoz IDAgb2JqCjw8L1R5cGUgL1BhZ2UKL1BhcmVudCAyIDAgUgovTWVkaWFCb3ggWzAgMCA1OTUgODQy XQovQ29udGVudHMgNSAwIFIKL1Jlc291cmNlcyA8PC9Qcm9jU2V0IFsvUERGIC9UZXh0XQovRm9u dCA8PC9GMSA0IDAgUj4+Cj4+Cj4+CmVuZG9iago0IDAgb2JqCjw8L1R5cGUgL0ZvbnQKL1N1YnR5 cGUgL1R5cGUxCi9OYW1lIC9GMQovQmFzZUZvbnQgL0hlbHZldGljYQovRW5jb2RpbmcgL01hY1Jv bWFuRW5jb2RpbmcKPj4KZW5kb2JqCjUgMCBvYmoKPDwvTGVuZ3RoIDUzCj4+CnN0cmVhbQpCVAov RjEgMjAgVGYKMjIwIDQwMCBUZAooRHVtbXkgUERGKSBUagpFVAplbmRzdHJlYW0KZW5kb2JqCnhy ZWYKMCA2CjAwMDAwMDAwMDAgNjU1MzUgZgowMDAwMDAwMDA5IDAwMDAwIG4KMDAwMDAwMDA2MyAw MDAwMCBuCjAwMDAwMDAxMjQgMDAwMDAgbgowMDAwMDAwMjc3IDAwMDAwIG4KMDAwMDAwMDM5MiAw MDAwMCBuCnRyYWlsZXIKPDwvU2l6ZSA2Ci9Sb290IDEgMCBSCj4+CnN0YXJ0eHJlZgo0OTUKJSVF T0YK', 'base64')
