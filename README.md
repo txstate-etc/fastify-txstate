@@ -306,6 +306,66 @@ const storage: FileHandler = process.env.FILE_STORAGE === 's3'
   : new FileSystemHandler()
 ```
 
+# Analytics
+The `analyticsPlugin` registers a `POST /analytics` endpoint that accepts an array of interaction events from your frontend, enriches them with server-side context (user agent, IP, authentication, timestamp), and flushes them in batches to a storage backend every 5 seconds.
+
+```javascript
+import Server, { analyticsPlugin } from 'fastify-txstate'
+const server = new Server()
+server.app.register(analyticsPlugin, { appName: 'my-app' })
+```
+
+The client sends events shaped like:
+```json
+[{
+  "eventType": "ActionPanel.svelte",
+  "screen": "/pages/[id]",
+  "action": "Edit Page",
+  "target": "/sites/5/pages/12"
+}]
+```
+
+`eventType`, `screen`, and `action` are required. `target` and `additionalProperties` are optional.
+
+## Options
+| Option | Description |
+|--------|-------------|
+| `appName` | **Required.** Identifies the application in stored events. |
+| `analyticsClient` | An `AnalyticsClient` instance for storing events. See below for defaults. |
+| `authorize` | A function `(req) => boolean` to restrict access to the endpoint. If it returns false, a 401 is thrown. |
+
+## Storage Clients
+By default, the plugin picks a client automatically:
+
+- If `ELASTICSEARCH_URL` is set, events are bulk-indexed into Elasticsearch using `ElasticAnalyticsClient`.
+- Otherwise, in development (`NODE_ENV=development`), events are logged to the console.
+- Otherwise, events are logged via the fastify logger (`LoggingAnalyticsClient`).
+
+You can override this by passing your own `analyticsClient`. Extend the `AnalyticsClient` class and implement the `push` method:
+
+```javascript
+import { AnalyticsClient, type StoredInteractionEvent } from 'fastify-txstate'
+
+class BigQueryAnalyticsClient extends AnalyticsClient {
+  async push (events: StoredInteractionEvent[]) {
+    // write events to BigQuery, ClickHouse, etc.
+  }
+}
+
+server.app.register(analyticsPlugin, {
+  appName: 'my-app',
+  analyticsClient: new BigQueryAnalyticsClient()
+})
+```
+
+### Elasticsearch Environment Variables
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `ELASTICSEARCH_URL` | Yes | Elasticsearch node URL. |
+| `ELASTICSEARCH_USER` | No | Defaults to `elastic`. |
+| `ELASTICSEARCH_PASS` | No | Elasticsearch password. |
+| `ELASTICSEARCH_USEREVENTS_INDEX` | No | Index name. Defaults to `interaction-analytics`. |
+
 ## Audience Validation
 Audience validation is a way to ensure that tokens you accept were generated with your API in mind. This helps when the token's claims include authorization like role memberships specific to your app. An attacker could register their own app with identical role names and use their token for your API, unless you specify your API as the only valid audience with OAUTH_TRUSTED_AUDIENCES.
 
