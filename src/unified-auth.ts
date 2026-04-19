@@ -2,7 +2,7 @@ import { createPublicKey, createSecretKey, type KeyObject, randomBytes } from 'n
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { createRemoteJWKSet, decodeJwt, type JWTPayload, jwtVerify, type JWTVerifyGetKey, type JWTHeaderParameters, type JWK, importJWK } from 'jose'
 import { Cache, htmlEncode, isBlank, isNotBlank, toArray } from 'txstate-utils'
-import type { IssuerConfig, FastifyInstanceTyped, FastifyTxStateAuthInfo } from './index.ts'
+import { apiBaseUrl, uiBaseUrl, type IssuerConfig, type FastifyInstanceTyped, type FastifyTxStateAuthInfo } from './index.ts'
 
 export interface IssuerConfigRaw extends Omit<IssuerConfig, 'validateUrl' | 'logoutUrl'> {
   validateUrl?: string
@@ -17,7 +17,9 @@ const issuerConfig = new Map<string, IssuerConfig>()
 const trustedClients = new Set<string>()
 const uaCookieName = process.env.UA_COOKIE_NAME ?? randomBytes(16).toString('hex')
 const uaCookieNameRegex = new RegExp(`${uaCookieName}=([^;]+)`, 'v')
-const uaServiceUrl = isNotBlank(process.env.PUBLIC_URL) ? process.env.PUBLIC_URL + (process.env.PUBLIC_URL.endsWith('/') ? '' : '/') + '.uaService' : undefined
+function uaServiceUrl (req: FastifyRequest) {
+  return apiBaseUrl(req) + '/.uaService'
+}
 
 const tokenCache = new Cache(async (token: string, req: FastifyRequest) => {
   const claims = decodeJwt(token)
@@ -35,8 +37,9 @@ const tokenCache = new Cache(async (token: string, req: FastifyRequest) => {
     }
     return payload
   } catch (e: unknown) {
-    // squelch errors about bad tokens, we can already see the 401 in the log
-    if ((e as { code?: string }).code !== 'ERR_JWS_SIGNATURE_VERIFICATION_FAILED') req.log.error(e)
+    // squelch expected token errors — bad signatures and expirations show as 401 in the access log
+    const code = (e as { code?: string }).code
+    if (code !== 'ERR_JWS_SIGNATURE_VERIFICATION_FAILED' && code !== 'ERR_JWT_EXPIRED') req.log.error(e)
     return undefined
   }
 }, { freshseconds: 3600 })
@@ -125,6 +128,7 @@ async function unifiedAuthenticateInternal (req: FastifyRequest): Promise<Fastif
   if (!token) return undefined
   const payload = await tokenCache.get(token, req)
   if (!payload) return undefined
+  if (payload.exp && payload.exp * 1000 <= Date.now()) return undefined
   await validateCache.get(token, payload)
   return {
     token,
@@ -187,7 +191,7 @@ export async function requireCookieAuth (req: FastifyRequest, res: FastifyReply)
   if (isBlank(req.auth?.username)) {
     const loginUrl = new URL(process.env.UA_URL! + '/login')
     loginUrl.searchParams.set('clientId', process.env.UA_CLIENTID!)
-    loginUrl.searchParams.set('returnUrl', uaServiceUrl ?? new URL('/.uaService', req.url).toString())
+    loginUrl.searchParams.set('returnUrl', uaServiceUrl(req))
     loginUrl.searchParams.set('requestedUrl', req.originalUrl)
     void res.redirect(loginUrl.toString())
     return true
@@ -213,7 +217,7 @@ export function registerUaCookieRoutes (app: FastifyInstanceTyped): void {
     async (req, res) => {
       const redirectUrl = req.auth?.issuerConfig?.logoutUrl && isNotBlank(req.auth.token)
         ? `${req.auth.issuerConfig.logoutUrl.toString()}?unifiedJwt=${encodeURIComponent(req.auth.token)}`
-        : (process.env.PUBLIC_URL || new URL('..', req.url).toString())
+        : uiBaseUrl(req)
       void res.header('Set-Cookie', `${uaCookieName}=; Path=/; Secure; HttpOnly; SameSite=Lax; Expires=Thu, 01 Jan 1970 00:00:00 GMT`)
       return `<!DOCTYPE html>
 <html lang="en">
@@ -244,13 +248,18 @@ export function registerUaCookieRoutes (app: FastifyInstanceTyped): void {
       }
     },
     async (req, res) => {
+      const destination = req.query.requestedUrl ?? uiBaseUrl(req)
+      if (req.query.requestedUrl && req.originChecker && !req.originChecker.check(req.query.requestedUrl, req.hostname)) {
+        void res.status(403)
+        return 'Requested URL failed origin check.'
+      }
       void res.header('Set-Cookie', `${uaCookieName}=${req.query.unifiedJwt}; Path=/; Secure; HttpOnly; SameSite=Lax`)
       void res.type('text/html')
       return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="refresh" content="0; url=${htmlEncode(req.query.requestedUrl ?? (process.env.PUBLIC_URL || new URL('..', req.url).toString()))}">
+  <meta http-equiv="refresh" content="0; url=${htmlEncode(destination)}">
   <title>Logging in...</title>
 </head>
 <body>
@@ -277,11 +286,15 @@ export function registerUaCookieRoutes (app: FastifyInstanceTyped): void {
       }
     }
   }, async (req, res) => {
+    if (req.query.requestedUrl && req.originChecker && !req.originChecker.check(req.query.requestedUrl, req.hostname)) {
+      void res.status(403)
+      return 'Requested URL failed origin check.'
+    }
     const loginUrl = isNotBlank(process.env.UA_URL)
       ? new URL(process.env.UA_URL + '/login')
       : new URL('login', issuerConfig.get('unified-auth')?.url)
     loginUrl.searchParams.set('clientId', process.env.UA_CLIENTID ?? process.env.JWT_TRUSTED_CLIENTIDS!.split(',')[0])
-    const returnUrl = uaServiceUrl ?? new URL('.uaService', req.protocol + '://' + req.hostname).toString()
+    const returnUrl = uaServiceUrl(req)
     loginUrl.searchParams.set('returnUrl', returnUrl)
     if (req.query.requestedUrl) loginUrl.searchParams.set('requestedUrl', req.query.requestedUrl)
     return await res.redirect(loginUrl.toString())

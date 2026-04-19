@@ -13,10 +13,30 @@ import http from 'node:http'
 import { Writable } from 'node:stream'
 import type http2 from 'node:http2'
 import type { OpenAPIV3 } from 'openapi-types'
-import { clone, destroyNulls, isBlank, omit, set, sleep, stringifyDates, toArray } from 'txstate-utils'
+import { clone, destroyNulls, isBlank, isNotBlank, omit, set, sleep, stringifyDates, toArray } from 'txstate-utils'
 import { HttpError, ValidationError, ValidationErrors, fstValidationToMessage } from './error.ts'
 
 type ErrorHandler = (error: Error, req: FastifyRequest, res: FastifyReply) => Promise<void>
+
+/**
+ * Get the base URL for this API. Uses PUBLIC_URL if set, otherwise derives
+ * from the request's protocol and hostname.
+ */
+export function apiBaseUrl (req: FastifyRequest): string {
+  if (isNotBlank(process.env.PUBLIC_URL)) return process.env.PUBLIC_URL.replace(/\/$/v, '')
+  return req.protocol + '://' + req.hostname
+}
+
+/**
+ * Get the base URL for the UI that this API serves. Uses UI_URL if set,
+ * otherwise assumes the API lives at a subpath (e.g. /api) and the UI is
+ * one level up. Falls back to the API base URL if there's no parent path.
+ */
+export function uiBaseUrl (req: FastifyRequest): string {
+  if (isNotBlank(process.env.UI_URL)) return process.env.UI_URL.replace(/\/$/v, '')
+  const base = apiBaseUrl(req)
+  return new URL('..', base + '/').toString().replace(/\/$/v, '')
+}
 
 export interface FastifyTxStateAuthInfo {
   /**
@@ -81,6 +101,13 @@ export interface FastifyTxStateAuthInfo {
    * a proper logout url in multi-issuer environments.
    */
   issuerConfig?: IssuerConfig
+  /**
+   * The OAuth access token, if available. This is useful when your API needs to make
+   * requests to the provider's APIs on behalf of the user (e.g. Google Drive, Microsoft
+   * Graph). Only populated when using cookie-based OAuth with a provider that returns
+   * an access token during the code exchange.
+   */
+  accessToken?: string
 }
 
 export interface IssuerConfig {
@@ -126,6 +153,7 @@ export interface FastifyTxStateOptions extends Partial<FastifyServerOptions> {
 declare module 'fastify' {
   interface FastifyRequest {
     auth?: FastifyTxStateAuthInfo
+    originChecker?: OriginChecker
   }
   interface FastifyReply {
     extraLogInfo: any
@@ -155,7 +183,7 @@ export const devLogger = pino({
 }))
 /* eslint-enable no-console */
 
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call -- pino serializer params are typed as any */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call -- pino serializer params are typed as any */
 export const prodLogger = pino({
   level: 'info',
   serializers: {
@@ -172,15 +200,51 @@ export const prodLogger = pino({
         statusCode: res.statusCode,
         url: res.request?.url.replace(/(?<param>token|unifiedJwt)=[\w.]+/iv, '$<param>=redacted'),
         length: Number(toArray(res.getHeader?.('content-length'))[0]),
-        ...res.extraLogInfo,
-        auth: omit(res.request?.auth ?? res.extraLogInfo?.auth ?? {}, 'token', 'issuerConfig')
+        ...omit(res.extraLogInfo, 'auth'),
+        auth: omit(res.request?.auth ?? res.extraLogInfo?.auth ?? {}, 'token', 'accessToken', 'issuerConfig')
       }
     }
   }
 })
-/* eslint-enable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call */
+/* eslint-enable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call */
 
 export type FastifyInstanceTyped = FastifyInstance<RawServerDefault, http.IncomingMessage, http.ServerResponse, FastifyBaseLogger, JsonSchemaToTsProvider>
+
+export class OriginChecker {
+  protected validOrigins: Record<string, boolean> = {}
+  protected validOriginHosts: Record<string, boolean> = {}
+  protected validOriginSuffixes = new Set<string>()
+
+  setValidOrigins (origins: string[]) {
+    this.validOrigins = origins.reduce((acc: Record<string, boolean>, origin) => ({ ...acc, [origin]: true }), {})
+  }
+
+  setValidOriginHosts (hosts: string[]) {
+    this.validOriginHosts = hosts.reduce((acc: Record<string, boolean>, host) => ({ ...acc, [host]: true }), {})
+  }
+
+  setValidOriginSuffixes (suffixes: string[]) {
+    this.validOriginSuffixes.clear()
+    for (const s of suffixes) this.validOriginSuffixes.add(s.replace(/^\./v, ''))
+  }
+
+  check (hostname: string, requestHostname?: string): boolean {
+    try {
+      const parsed = new URL(hostname.includes('://') ? hostname : 'https://' + hostname)
+      if (this.validOrigins[parsed.origin]) return true
+      if (requestHostname && parsed.hostname === requestHostname) return true
+      if (this.validOriginHosts[parsed.hostname]) return true
+      const parts = parsed.hostname.split('.')
+      for (let i = 0; i < parts.length; i++) {
+        if (this.validOriginSuffixes.has(parts.slice(i).join('.'))) return true
+      }
+      return false
+    } catch {
+      return false
+    }
+  }
+}
+
 export type TxServer = Server
 export default class Server {
   protected https = false
@@ -189,9 +253,7 @@ export default class Server {
   protected healthCallback?: () => Promise<string | { status?: number, message?: string } | undefined>
   protected shuttingDown = false
   protected sigHandler: (signal: any) => void
-  protected validOrigins: Record<string, boolean> = {}
-  protected validOriginHosts: Record<string, boolean> = {}
-  protected validOriginSuffixes = new Set<string>()
+  protected originChecker = new OriginChecker()
   protected swaggerEndpoint: string | undefined
   public app: FastifyInstanceTyped
 
@@ -273,31 +335,19 @@ export default class Server {
 
     this.app.addHook('onRequest', (req, res, done) => {
       res.extraLogInfo = {}
+      req.originChecker = this.originChecker
       done()
     })
 
     if (!config.skipOriginCheck && !process.env.SKIP_ORIGIN_CHECK) {
-      this.setValidOrigins([...(config.validOrigins ?? []), ...(process.env.VALID_ORIGINS?.split(',') ?? [])])
-      this.setValidOriginHosts([...(config.validOriginHosts ?? []), ...(process.env.VALID_ORIGIN_HOSTS?.split(',') ?? [])])
-      this.setValidOriginSuffixes([...(config.validOriginSuffixes ?? []), ...(process.env.VALID_ORIGIN_SUFFIXES?.split(',') ?? [])])
+      this.originChecker.setValidOrigins([...(config.validOrigins ?? []), ...(process.env.VALID_ORIGINS?.split(',') ?? [])])
+      this.originChecker.setValidOriginHosts([...(config.validOriginHosts ?? []), ...(process.env.VALID_ORIGIN_HOSTS?.split(',') ?? [])])
+      this.originChecker.setValidOriginSuffixes([...(config.validOriginSuffixes ?? []), ...(process.env.VALID_ORIGIN_SUFFIXES?.split(',') ?? [])])
       this.app.addHook('onRequest', async (req, res) => {
         if (!req.headers.origin) return
-        let passed = this.validOrigins[req.headers.origin]
-        if (!passed && req.headers.origin === 'null') passed = process.env.NODE_ENV === 'development'
-        else if (!passed) {
-          const parsedOrigin = new URL(req.headers.origin)
-          if (req.hostname === parsedOrigin.hostname) passed = true
-          if (this.validOriginHosts[parsedOrigin.hostname]) passed = true
-
-          if (!passed && this.validOriginSuffixes.size > 0) {
-            const originParts = parsedOrigin.hostname.split('.')
-            for (let i = 0; i < originParts.length; i++) {
-              const suffix = originParts.slice(i).join('.')
-              if (this.validOriginSuffixes.has(suffix)) passed = true
-            }
-          }
-        }
-        if (!passed && config.checkOrigin?.(req)) passed = true
+        const passed = (req.headers.origin === 'null'
+          ? process.env.NODE_ENV === 'development'
+          : this.originChecker.check(req.headers.origin, req.hostname)) || !!config.checkOrigin?.(req)
         if (!passed) {
           await res.status(403).send('Origin check failed. Suspected XSRF attack.')
           return await res
@@ -436,16 +486,15 @@ export default class Server {
   }
 
   public setValidOrigins (origins: string[]) {
-    this.validOrigins = origins.reduce((validOrigins: Record<string, boolean>, origin) => ({ ...validOrigins, [origin]: true }), {})
+    this.originChecker.setValidOrigins(origins)
   }
 
   public setValidOriginHosts (hosts: string[]) {
-    this.validOriginHosts = hosts.reduce((validHosts: Record<string, boolean>, host) => ({ ...validHosts, [host]: true }), {})
+    this.originChecker.setValidOriginHosts(hosts)
   }
 
   public setValidOriginSuffixes (suffixes: string[]) {
-    this.validOriginSuffixes.clear()
-    for (const s of suffixes) this.validOriginSuffixes.add(s.replace(/^\./v, ''))
+    this.originChecker.setValidOriginSuffixes(suffixes)
   }
 
   public async swagger (opts?: { path?: string, openapi?: FastifyDynamicSwaggerOptions['openapi'], ui?: FastifySwaggerUiOptions }) {
@@ -507,4 +556,5 @@ export * from './analytics.ts'
 export * from './error.ts'
 export * from './filestorage.ts'
 export * from './unified-auth.ts'
+export * from './oauth.ts'
 export * from './postformdata.ts'

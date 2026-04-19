@@ -1,5 +1,5 @@
 # fastify-txstate
-A small wrapper for fastify providing a set of common conventions &amp; utility functions we use.
+A small wrapper for fastify providing a set of common conventions & utility functions for presenting an HTTP server.
 
 > **v4 upgrades to fastify 5 and drops CommonJS, among other things.** See the [changelog](https://github.com/txstate-etc/fastify-txstate/blob/master/CHANGELOG.md) for upgrade notes.
 
@@ -107,3 +107,125 @@ Development and production logs are different, based on the `NODE_ENV` environme
 If you want to provide your own logger, you can pass a pino instance via the `loggerInstance` option in the server constructor configuration. The `devLogger` and `prodLogger` are also exported if you'd like to use them as a starting point.
 
 You can also simply add information to the `reply.extraLogInfo` object and it will automatically appear in the outgoing access log in production.
+
+# Authentication
+Pass an `authenticate` function to the Server constructor to enable authentication. It runs as an `onRequest` hook on all standard HTTP methods (GET, POST, PUT, PATCH, DELETE), except `/health` and swagger endpoints. The return value is available at `req.auth` in your route handlers and is included in production logs (minus `token`, `accessToken`, and `issuerConfig`).
+```javascript
+import Server from 'fastify-txstate'
+const server = new Server({
+  authenticate: async (req) => {
+    // extract and verify credentials from the request
+    // return a FastifyTxStateAuthInfo object, or undefined if unauthenticated
+    // throw to reject with 401
+  }
+})
+```
+The `authenticate` function should return a `FastifyTxStateAuthInfo` object with at least `username`, `sessionId`, and `token`. This gives us a predictable interface, since raw JWT claims may vary by provider. Returning `undefined` means the request is unauthenticated (but allowed). Throwing an error sends a 401 response.
+
+We provide two built-in implementations: `unifiedAuthenticate` for TxState's Unified Auth service, and `oauthAuthenticate` for standard OAuth/OIDC providers. You can also write your own for any authentication scheme — API keys, session lookups, custom JWTs, etc.
+
+# OAuth Authentication
+The `oauthAuthenticate` function we provide validates JWT tokens (access tokens or ID tokens) from any OAuth/OIDC provider. It uses the token's `iss` claim to auto-discover the provider's JWKS endpoint via `.well-known/openid-configuration` or `.well-known/oauth-authorization-server`, then verifies the signature locally.
+
+For providers like Google that issue opaque access tokens, have the client send the ID token instead — it's a standard JWT that proves the user's identity without requiring a round-trip to the provider on every request.
+```javascript
+import Server, { oauthAuthenticate } from 'fastify-txstate'
+const server = new Server({
+  authenticate: req => oauthAuthenticate(req, { authenticateAll: true })
+})
+```
+## Environment Variables
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `OAUTH_TRUSTED_ISSUERS` | Yes | Comma-separated list of trusted issuer URLs (e.g. `https://accounts.google.com,https://login.microsoftonline.com/{tenant}/v2.0`) |
+| `OAUTH_TRUSTED_AUDIENCES` | No | Comma-separated list of accepted `aud` values. See [Audience Validation](#audience-validation) for details. |
+| `OAUTH_TRUSTED_CLIENTIDS` | No | Comma-separated list of accepted `client_id` values. |
+| `OAUTH_ISSUER_INTERNAL_URLS` | No | Map external issuer URLs to internal URLs for docker-compose / split-horizon DNS scenarios where the browser reaches the provider on one hostname but the resource provider reaches it on another. Format: `external=internal` (e.g. `https://auth.example.com=http://keycloak:8080`). Rewrites server-to-server requests (discovery, JWKS, token exchange) but not browser redirects. |
+
+## Options
+| Option | Description |
+|--------|-------------|
+| `authenticateAll` | If true, all requests require authentication except routes in `exceptRoutes` or `optionalRoutes`. |
+| `exceptRoutes` | `Set<string>` of route URLs that skip authentication entirely and do not receive an auth object. |
+| `optionalRoutes` | `Set<string>` of route URLs that do not require authentication but populate `req.auth` if a session is available. |
+| `usingOAuthCookieRoutes` | Set to true if you are using `registerOAuthCookieRoutes` with `authenticateAll`. Automatically excludes cookie endpoints from authentication requirements. |
+| `extraClaims` | A function that receives the full JWT payload and returns extra properties to merge into the auth object (e.g. `payload => ({ roles: payload.roles })`). If you use this, you should also set `OAUTH_TRUSTED_AUDIENCES`. See [Audience Validation](#audience-validation). |
+
+## Cookie Endpoints
+For server-rendered applications or SPAs that need cookie-based sessions, `registerOAuthCookieRoutes` implements the full OAuth authorization code flow with PKCE (S256), storing the ID token in an HttpOnly cookie. The access token and refresh token are stored in separate cookies (optionally encrypted via `OAUTH_COOKIE_SECRET`). Expired ID tokens are transparently refreshed using the refresh token cookie.
+```javascript
+import Server, { oauthAuthenticate, registerOAuthCookieRoutes } from 'fastify-txstate'
+const server = new Server({
+  authenticate: req => oauthAuthenticate(req, {
+    authenticateAll: true,
+    usingOAuthCookieRoutes: true
+  })
+})
+registerOAuthCookieRoutes(server.app)
+```
+The access token is available at `req.auth.accessToken` for making requests to the provider's APIs on behalf of the user (e.g. Google Drive, Microsoft Graph).
+`registerOAuthCookieRoutes` accepts an optional second argument with:
+| Option | Description |
+|--------|-------------|
+| `scopes` | Array of scopes to always include in the authorization request, merged with any scopes the client passes via the `scope` query parameter. |
+| `loginPage` | A function for rendering a login selection page when multiple issuers are configured. See [Multiple Issuers](#multiple-issuers). |
+
+### Multiple Issuers
+When `OAUTH_TRUSTED_ISSUERS` contains multiple issuers, you can provide a `loginPage` function to let the user choose which provider to sign in with. The function receives an array of `{ issuerUrl, redirectHref }` and should return an HTML string.
+```javascript
+registerOAuthCookieRoutes(server.app, {
+  loginPage: issuers => `<!DOCTYPE html>
+    <html><body>
+      <h1>Sign in with</h1>
+      ${issuers.map(i => `<a href="${i.redirectHref}">${new URL(i.issuerUrl).hostname}</a>`).join('<br>')}
+    </body></html>`
+})
+```
+When a user hits `/.oauthRedirect` without specifying an `issuer` query parameter, they see this page. Each link redirects back to `/.oauthRedirect` with the chosen issuer pre-filled. If no `loginPage` is provided, the first trusted issuer is used. Clients can also bypass the selection by passing `issuer` directly: `/.oauthRedirect?requestedUrl=...&issuer=https://accounts.google.com`.
+
+### Additional Environment Variables
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `OAUTH_CLIENT_ID` | Yes | OAuth client ID for the authorization code flow. |
+| `OAUTH_CLIENT_SECRET` | No | OAuth client secret. PKCE secures the code exchange, but some providers require a secret even with PKCE. |
+| `OAUTH_COOKIE_SECRET` | No | If set, the refresh token and access token cookies are encrypted with AES-256-GCM. If not, they are stored as plaintext (still HttpOnly and Secure). |
+| `OAUTH_COOKIE_NAME` | No | Name for the session cookie. Defaults to a random hex string. |
+| `PUBLIC_URL` | No | Base URL for the API, used to generate callback URIs (e.g. `https://myapp.example.com/api`). Derived from the request hostname if not set. |
+| `UI_URL` | No | Base URL for the UI (e.g. `https://myapp.example.com`). Used as the default redirect destination after login/logout. If not set, guessed by removing the last path segment from `PUBLIC_URL` or the request URL. |
+
+### Routes
+- **`GET /.oauthRedirect?requestedUrl=...&scope=...&issuer=...`** — Redirects to the OAuth provider's login page. `requestedUrl` is required and specifies where to redirect after login. `scope` is optional and defaults to `openid offline_access`. `issuer` is optional and selects which trusted issuer to use; if omitted with multiple issuers and a `loginPage` configured, a selection page is shown.
+- **`GET /.oauthCallback`** — Handles the provider's redirect. Exchanges the authorization code for tokens (using PKCE), sets the ID token, access token, and refresh token as cookies, and redirects to the original `requestedUrl`. If no ID token is returned, falls back to the access token if it is a JWT.
+- **`GET /.oauthLogout`** — Clears all OAuth cookies and redirects to the provider's `end_session_endpoint` if available, with the ID token as a hint for single sign-out.
+
+## Client-Side Authentication (without cookie endpoints)
+If you are implementing the OAuth flow in your client application instead of using the cookie endpoints above, send the token to the API as an `Authorization: Bearer <token>` header. Here is what you need to know:
+
+### Which token to send
+The API validates tokens locally by verifying the JWT signature against the provider's JWKS. This means **the token must be a JWT**. Choose accordingly:
+- **Microsoft, Okta, Auth0, Keycloak**: Access tokens are JWTs. Send the access token.
+- **Google**: Access tokens are opaque and cannot be verified locally. Send the **ID token** instead — it is a standard JWT containing the user's identity.
+- **General rule**: If your provider's access token is a JWT (three base64url segments separated by dots), send it. If it's opaque, send the ID token.
+
+### Scopes
+Scopes control what the user sees on the consent screen and what permissions the token carries. Each provider has its own conventions:
+- **Google**: `openid` for basic sign-in, add `email` or `profile` for more claims. Scopes like `https://www.googleapis.com/auth/drive.readonly` authorize access to Google APIs — only request these if the client needs them.
+- **Microsoft**: `openid` for sign-in, `User.Read` for Microsoft Graph, `api://{resource-id}/.default` for custom APIs.
+- **Okta / Auth0**: `openid` for sign-in, custom scopes as configured in your authorization server.
+- For all providers, `openid` is the minimum needed to get an ID token.
+
+### Refresh tokens
+The client is responsible for refreshing tokens before they expire and sending a fresh token with each request. How to obtain a refresh token varies by provider:
+- **Most OIDC providers** (Microsoft, Okta, Auth0, Keycloak): Request the `offline_access` scope.
+- **Google**: Pass `access_type=offline&prompt=consent` as query parameters on the authorization request. The `offline_access` scope is ignored.
+- **Apple, AWS Cognito**: Return refresh tokens automatically based on app configuration — no special scope needed.
+
+### PKCE
+Use PKCE (S256) for the authorization code exchange even if your provider doesn't require it. Generate a `code_verifier`, send the `code_challenge` in the authorization request, and include the `code_verifier` when exchanging the code for tokens. This protects against authorization code interception and is supported by all major providers.
+
+## Audience Validation
+Audience validation is a way to ensure that tokens you accept were generated with your API in mind. This helps when the token's claims include authorization like role memberships specific to your app. An attacker could register their own app with identical role names and use their token for your API, unless you specify your API as the only valid audience with OAUTH_TRUSTED_AUDIENCES.
+
+fastify-txstate is somewhat opinionated about storing authorization information in your authentication tokens. It's generally not a good idea - you'll end up with people staying in roles until their token expires, and be vulnerable to attacks like this. Let the authentication layer identify the user, and let your API match the user's identity with any authorization roles. To this end, `FastifyTxStateAuthInfo` doesn't have any spec for authorization-related claims.
+
+Audience validation only becomes necessary if you use the `extraClaims` option to pull authorization claims from the token into your `auth` object.

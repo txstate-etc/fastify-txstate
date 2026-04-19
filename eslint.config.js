@@ -55,6 +55,7 @@ export default [
       '@typescript-eslint/restrict-template-expressions': ['error', { allowAny: true }], // `${myVar}` is fine if myVar is `any`
       '@typescript-eslint/strict-boolean-expressions': 'off', // we know how truthiness works, annoying to have to avoid
       complexity: 'off', // complexity is a judgment call, not a number
+      'max-lines': 'off',
       eqeqeq: ['error', 'always', { null: 'ignore' }], // == null is best practice for null/undefined checks
       'max-depth': 'off',
       'no-await-in-loop': 'off', // sequential awaits are often intentional to avoid overwhelming a resource
