@@ -58,6 +58,65 @@ This format is well supported by our @txstate-mws/svelte-forms library, so it sh
 ### ValidationError
 `ValidationErrors` is preferred since it will show multiple errors at once, instead of making the user fix errors one at a time and not know how far they are from being done. If you just need to throw a quick single error, `throw new ValidationError('Wrong!', 'answer')` is also available.
 
+# Route Schemas
+We configure the `@fastify/type-provider-json-schema-to-ts` type provider, so when you define a schema with `as const`, TypeScript infers request and response types automatically:
+```javascript
+const createUserBody = {
+  type: 'object',
+  properties: {
+    name: { type: 'string' },
+    email: { type: 'string' },
+    age: { type: 'integer', minimum: 0 }
+  },
+  additionalProperties: false
+} as const
+
+server.app.post('/users', {
+  schema: {
+    body: createUserBody,
+    response: { 200: validatedResponse, 422: validatedResponse }
+  }
+}, async (req, res) => {
+  // req.body is fully typed — name, email, age are all inferred
+})
+```
+
+When a route has a `body` schema, we automatically add 400 and 422 response schemas for validation errors, so those don't need to be specified manually.
+
+## Schema Validation vs. Business Validation
+We configure Ajv with `coerceTypes`, `allErrors`, `ajv-formats` (for `date-time`, `email`, `uri`, etc.), and `ajv-errors` (for custom `errorMessage` strings). `strictSchema` is off, so OpenAPI properties like `example` and `description` won't cause errors.
+
+An important design point: **schema validation is for catching client bugs, not user mistakes.** When the schema rejects a request, the user gets a generic 400 — not a friendly inline message on a form field. If you want the user to see "Name is required" next to the name input, don't put `required: ['name']` in the schema. Instead, make it optional in the schema and check it in your route handler with a `ValidationMessage` (see [Error Handling](#error-handling)). Reserve schema-level `required`, `pattern`, and `format` for things the client is responsible for, like ensuring dates are in ISO format.
+
+## SchemaObject Type
+If you define schemas as standalone objects, you can take advantage of the `SchemaObject` exported by `@txstate-mws/fastify-shared`. It extends JSON Schema with OpenAPI properties (`example`, `description`) and `ajv-errors` support (`errorMessage`). Add `as const satisfies SchemaObject` to the end of your object before you start filling it with properties and you'll
+get autocomplete support in your IDE and confidence that your schema is compliant.
+```typescript
+import type { SchemaObject } from '@txstate-mws/fastify-shared'
+
+const addressSchema = {
+  type: 'object',
+  properties: {
+    street: { type: 'string', example: '123 Main St' },
+    city: { type: 'string', example: 'San Marcos' },
+    zip: { type: 'string', description: '5-digit US zip code' }
+  },
+  additionalProperties: false
+} as const satisfies SchemaObject
+```
+
+## Response Serialization
+Responses are validated through Ajv (not fast-json-stringify), so input and output validation behave identically. If a response doesn't match its schema, the server throws an error rather than sending malformed data. Null values are converted to `undefined` before validation, and Date objects are automatically stringified to ISO format.
+
+## Swagger / OpenAPI
+Call `server.swagger()` before registering routes to enable auto-generated documentation:
+```javascript
+const server = new Server()
+await server.swagger({ path: '/docs' })
+// register routes after this
+```
+Route schemas are exposed in the OpenAPI spec automatically. The `example` and `description` properties appear in the Swagger UI. If authentication is configured, security schemes are added automatically.
+
 ## Custom Error Handling
 If you would like special treatment for certain errors, `addErrorHandler` provides an easy way:
 ```javascript
@@ -391,4 +450,5 @@ If you use AI coding agents (Claude Code, Cursor, Copilot, etc.) to help build y
 | [`validation.md`](skills/validation.md) | Teaches the agent how to create POST/PUT endpoints that cooperate with svelte-forms to show validation feedback to users. |
 | [`authentication.md`](skills/authentication.md) | Teaches the agent how to configure authentication for the server. |
 | [`file-handling.md`](skills/file-handling.md) | Teaches the agent how to use our tools for streaming files to disk or swappable backends |
+| [`endpoint-schemas.md`](skills/endpoint-schemas.md) | Teaches the agent how to define route schemas for type inference, validation, and Swagger documentation |
 | [`analytics.md`](skills/analytics.md) | Teaches the agent how to configure the server for interaction event tracking in Elasticsearch or a custom storage client |
