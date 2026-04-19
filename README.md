@@ -223,6 +223,38 @@ The client is responsible for refreshing tokens before they expire and sending a
 ### PKCE
 Use PKCE (S256) for the authorization code exchange even if your provider doesn't require it. Generate a `code_verifier`, send the `code_challenge` in the authorization request, and include the `code_verifier` when exchanging the code for tokens. This protects against authorization code interception and is supported by all major providers.
 
+# Streaming File Proxy with postFormData
+When your API receives a file upload and needs to forward it to another service, you typically have to buffer the entire file in memory or write it to disk first. The `postFormData` helper avoids this by constructing a multipart/form-data request from streams, allowing you to pipe an incoming upload directly to a remote API with no intermediate storage.
+
+For example, proxying an uploaded file to S3-compatible storage:
+```javascript
+import Server, { postFormData } from 'fastify-txstate'
+const server = new Server()
+server.app.post('/upload', async (req, res) => {
+  const results = []
+  for await (const part of req.parts()) {
+    if (part.type === 'file') {
+      // forward each file stream directly to S3 with no intermediate storage
+      const resp = await postFormData(
+        `https://s3.amazonaws.com/${BUCKET_NAME}`,
+        [
+          { name: 'key', value: `uploads/${part.filename}` },
+          { name: 'Content-Type', value: part.mimetype },
+          { name: 'file', value: part.file, filename: part.filename, filetype: part.mimetype }
+        ],
+        { Authorization: `AWS ${AWS_ACCESS_KEY}:${signature}` }
+      )
+      results.push({ filename: part.filename, status: resp.status })
+    }
+  }
+  return results
+})
+```
+
+Each field is either a text field (`{ name, value: string }`) or a file field (`{ name, value: ReadableStream | Readable, filename?, filetype?, filesize? }`). If all file fields include `filesize`, a `Content-Length` header is calculated automatically; otherwise the request is sent as chunked.
+
+You can also pass custom headers as a third argument: `postFormData(url, fields, { Authorization: 'Bearer ...' })`.
+
 ## Audience Validation
 Audience validation is a way to ensure that tokens you accept were generated with your API in mind. This helps when the token's claims include authorization like role memberships specific to your app. An attacker could register their own app with identical role names and use their token for your API, unless you specify your API as the only valid audience with OAUTH_TRUSTED_AUDIENCES.
 
