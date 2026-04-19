@@ -255,6 +255,57 @@ Each field is either a text field (`{ name, value: string }`) or a file field (`
 
 You can also pass custom headers as a third argument: `postFormData(url, fields, { Authorization: 'Bearer ...' })`.
 
+# File Storage with FileSystemHandler
+`FileSystemHandler` provides an opinionated way to stream uploaded files into the local filesystem, named by their SHA-256 checksum. Since identical files produce the same checksum, duplicates are automatically deduplicated — uploading the same file twice stores it only once.
+
+Files are organized into a two-level directory structure based on the checksum (`a/b/cdef...`) to avoid overwhelming a single directory with too many entries.
+
+```javascript
+import Server, { FileSystemHandler } from 'fastify-txstate'
+const storage = new FileSystemHandler({ tmpdir: '/files/tmp', permdir: '/files/storage' })
+await storage.init() // ensures tmpdir and permdir exist
+
+const server = new Server()
+server.app.post('/upload', async (req, res) => {
+  const results = []
+  for await (const part of req.parts()) {
+    if (part.type === 'file') {
+      const { checksum, size } = await storage.put(part.file)
+      // save the checksum in your database alongside whatever record it was uploaded against
+    }
+  }
+})
+
+server.app.get('/download/:checksum', async (req, res) => {
+  const stream = storage.get(req.params.checksum)
+  return res.send(stream)
+})
+```
+
+The `put` method streams the file to a temporary location while computing its SHA-256 hash, then re-reads the file to verify it was written correctly before moving it to its permanent checksum-based path. It returns the `checksum` (base64url-encoded) and `size` in bytes.
+
+| Method | Description |
+|--------|-------------|
+| `init()` | Creates `tmpdir` and `permdir` if they don't exist. Call this before using the handler. |
+| `put(stream)` | Streams a `Readable` to storage. Returns `{ checksum, size }`. |
+| `get(checksum)` | Returns a `Readable` stream for the file. |
+| `remove(checksum)` | Deletes the file. No-op if already gone. |
+| `exists(checksum)` | Returns `true` if the file exists. |
+| `fileSize(checksum)` | Returns the file size in bytes. |
+
+Both `tmpdir` and `permdir` default to `/files/tmp/` and `/files/storage/` respectively. A default instance is also exported as `fileHandler` if the defaults work for your setup.
+
+The `FileHandler` interface is also exported, so you can write your own storage backend with the same API. The idea is that your application accepts a `FileHandler` as configuration rather than depending on a concrete implementation. In development or simple deployments you use `FileSystemHandler`; in production a different instance of the same service could provide an S3-backed implementation — the route handlers don't change. The `postFormData` helper is useful for building cloud implementations, since it can stream files to a remote API without buffering.
+
+```javascript
+import { FileSystemHandler, type FileHandler } from 'fastify-txstate'
+import { S3FileHandler } from './s3filehandler.js'
+
+const storage: FileHandler = process.env.FILE_STORAGE === 's3'
+  ? new S3FileHandler({ bucket: process.env.S3_BUCKET })
+  : new FileSystemHandler()
+```
+
 ## Audience Validation
 Audience validation is a way to ensure that tokens you accept were generated with your API in mind. This helps when the token's claims include authorization like role memberships specific to your app. An attacker could register their own app with identical role names and use their token for your API, unless you specify your API as the only valid audience with OAUTH_TRUSTED_AUDIENCES.
 
