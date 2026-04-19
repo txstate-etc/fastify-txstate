@@ -92,14 +92,14 @@ During this period, `/health` will return HTTP 503, but all other requests will 
 # Origin Checking
 To help prevent XSRF attacks, we automatically reject requests that send an origin header that doesn't match the host (sub)domain. Only domain is compared, not protocol or port. This is especially helpful in large organizations where untrusted web sites run under different subdomains. SameSite cookies can help with attacks from other domains, but attacks on the same subdomain can still succeed.
 
-There are several ways to allow additional origins. Each is available as a constructor config option, an environment variable (comma-separated), and a runtime setter:
+There are several ways to allow additional origins. Each is available as a constructor config option and an environment variable (comma-separated).
 
-| Config | Env Var | Runtime | Match behavior |
-|--------|---------|---------|----------------|
-| `validOrigins` | `VALID_ORIGINS` | `server.setValidOrigins(origins)` | Exact origin match including scheme and port (e.g. `https://app.example.com`) |
-| `validOriginHosts` | `VALID_ORIGIN_HOSTS` | `server.setValidOriginHosts(hosts)` | Hostname match, ignoring scheme and port (e.g. `app.example.com`) |
-| `validOriginSuffixes` | `VALID_ORIGIN_SUFFIXES` | `server.setValidOriginSuffixes(suffixes)` | Domain suffix match — allows any subdomain (e.g. `example.com` allows `foo.example.com`, `bar.baz.example.com`) |
-| `checkOrigin` | — | — | Custom function `(req) => boolean` for arbitrary logic. Runs after the other checks; return true to allow. |
+| Config | Env Var | Match behavior |
+|--------|---------|----------------|
+| `validOrigins` | `VALID_ORIGINS` | Exact origin match including scheme and port (e.g. `https://app.example.com`) |
+| `validOriginHosts` | `VALID_ORIGIN_HOSTS` | Hostname match, ignoring scheme and port (e.g. `app.example.com`) |
+| `validOriginSuffixes` | `VALID_ORIGIN_SUFFIXES` | Domain suffix match — allows any subdomain (e.g. `example.com` allows `foo.example.com`, `bar.baz.example.com`) |
+| `checkOrigin` | — | Custom function `(req) => boolean` for arbitrary logic. Runs after the other checks; return true to allow. |
 
 All methods are additive — an origin is allowed if it passes any check.
 
