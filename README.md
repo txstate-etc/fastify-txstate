@@ -372,3 +372,14 @@ Audience validation is a way to ensure that tokens you accept were generated wit
 fastify-txstate is somewhat opinionated about storing authorization information in your authentication tokens. It's generally not a good idea - you'll end up with people staying in roles until their token expires, and be vulnerable to attacks like this. Let the authentication layer identify the user, and let your API match the user's identity with any authorization roles. To this end, `FastifyTxStateAuthInfo` doesn't have any spec for authorization-related claims.
 
 Audience validation only becomes necessary if you use the `extraClaims` option to pull authorization claims from the token into your `auth` object.
+
+# AI Agent Skills
+If you use AI coding agents (Claude Code, Cursor, Copilot, etc.) to help build your APIs, this repo includes skill files that teach them how to use fastify-txstate. Copy the ones relevant to your project into your agent configuration (e.g. `.claude/` or `.cursor/rules/`):
+
+| Skill | Description |
+|-------|-------------|
+| [`server-basics.md`](skills/server-basics.md) | Teaches the agent how to set up the server's error handling, SSL, health checks, logging |
+| [`validation.md`](skills/validation.md) | Teaches the agent how to create POST/PUT endpoints that cooperate with svelte-forms to show validation feedback to users. |
+| [`authentication.md`](skills/authentication.md) | Teaches the agent how to configure authentication for the server. |
+| [`file-handling.md`](skills/file-handling.md) | Teaches the agent how to use our tools for streaming files to disk or swappable backends |
+| [`analytics.md`](skills/analytics.md) | Teaches the agent how to configure the server for interaction event tracking in Elasticsearch or a custom storage client |
