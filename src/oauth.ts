@@ -2,7 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:
 import type { FastifyRequest } from 'fastify'
 import { createRemoteJWKSet, decodeJwt, jwtVerify } from 'jose'
 import { Cache, isBlank, isNotBlank, htmlEncode } from 'txstate-utils'
-import { apiBaseUrl, uiBaseUrl, type FastifyTxStateAuthInfo, type FastifyInstanceTyped, type IssuerConfig } from './index.ts'
+import { apiBaseUrl, uiBaseUrl, type FastifyTxStateAuthInfo, type FastifyInstanceTyped, type IssuerConfig } from './server.ts'
 
 interface OAuthDiscovery {
   issuer: string

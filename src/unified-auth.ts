@@ -2,7 +2,7 @@ import { createPublicKey, createSecretKey, type KeyObject, randomBytes } from 'n
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { createRemoteJWKSet, decodeJwt, type JWTPayload, jwtVerify, type JWTVerifyGetKey, type JWTHeaderParameters, type JWK, importJWK } from 'jose'
 import { Cache, htmlEncode, isBlank, isNotBlank, toArray } from 'txstate-utils'
-import { apiBaseUrl, uiBaseUrl, type IssuerConfig, type FastifyInstanceTyped, type FastifyTxStateAuthInfo } from './index.ts'
+import { apiBaseUrl, uiBaseUrl, type IssuerConfig, type FastifyInstanceTyped, type FastifyTxStateAuthInfo } from './server.ts'
 
 export interface IssuerConfigRaw extends Omit<IssuerConfig, 'validateUrl' | 'logoutUrl'> {
   validateUrl?: string

@@ -4,7 +4,8 @@ import type { FastifyBaseLogger, FastifyInstance, FastifyRequest } from 'fastify
 import type { IncomingHttpHeaders } from 'node:http'
 import { Cache, isBlank, omit, pick } from 'txstate-utils'
 import { type IBrowser, UAParser, type IDevice, type IOS } from 'ua-parser-js'
-import { HttpError, type FastifyTxStateAuthInfo } from './index.ts'
+import { HttpError } from './error.ts'
+import type { FastifyTxStateAuthInfo } from './server.ts'
 
 export interface StoredInteractionEvent extends InteractionEvent {
   '@timestamp': string
