@@ -190,25 +190,54 @@ const server = new Server({
 ```
 The `authenticate` function should return a `FastifyTxStateAuthInfo` object with at least `username`, `sessionId`, and `token`. This gives us a predictable interface, since raw JWT claims may vary by provider. Returning `undefined` means the request is unauthenticated (but allowed). Throwing an error sends a 401 response.
 
-We provide two built-in implementations: `unifiedAuthenticate` for TxState's Unified Auth service, and `oauthAuthenticate` for standard OAuth/OIDC providers. You can also write your own for any authentication scheme — API keys, session lookups, custom JWTs, etc.
+We provide a built-in `jwtAuthenticate` that validates JWT tokens from any combination of issuer types — OAuth/OIDC providers (with auto-discovery), TxState Unified Auth, raw JWKS endpoints, symmetric secrets, and asymmetric public keys. You can also write your own `authenticate` for any authentication scheme — API keys, session lookups, custom token formats, etc.
 
-# OAuth Authentication
-The `oauthAuthenticate` function we provide validates JWT tokens (access tokens or ID tokens) from any OAuth/OIDC provider. It uses the token's `iss` claim to auto-discover the provider's JWKS endpoint via `.well-known/openid-configuration` or `.well-known/oauth-authorization-server`, then verifies the signature locally.
+# JWT Authentication
+The `jwtAuthenticate` function validates JWTs from the `Authorization: Bearer` header or a session cookie. It supports any mix of these issuer types:
+
+- **OAuth/OIDC** — auto-discovers the provider's JWKS via `.well-known/openid-configuration` or `.well-known/oauth-authorization-server` from the issuer's `iss` claim.
+- **TxState Unified Auth** — JWKS + a `/validateToken` poll for centralized deauth.
+- **JWKS endpoint** — a direct JWKS URL (no discovery).
+- **Asymmetric public key** — a PEM-encoded RSA/EC public key.
+- **Symmetric secret** — an HMAC shared secret.
 
 For providers like Google that issue opaque access tokens, have the client send the ID token instead — it's a standard JWT that proves the user's identity without requiring a round-trip to the provider on every request.
 ```javascript
-import Server, { oauthAuthenticate } from 'fastify-txstate'
+import Server, { jwtAuthenticate } from 'fastify-txstate'
 const server = new Server({
-  authenticate: req => oauthAuthenticate(req, { authenticateAll: true })
+  authenticate: req => jwtAuthenticate(req, { authenticateAll: true })
 })
 ```
 ## Environment Variables
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `OAUTH_TRUSTED_ISSUERS` | Yes | Comma-separated list of trusted issuer URLs (e.g. `https://accounts.google.com,https://login.microsoftonline.com/{tenant}/v2.0`) |
-| `OAUTH_TRUSTED_AUDIENCES` | No | Comma-separated list of accepted `aud` values. See [Audience Validation](#audience-validation) for details. |
-| `OAUTH_TRUSTED_CLIENTIDS` | No | Comma-separated list of accepted `client_id` values. |
-| `OAUTH_ISSUER_INTERNAL_URLS` | No | Map external issuer URLs to internal URLs for docker-compose / split-horizon DNS scenarios where the browser reaches the provider on one hostname but the resource provider reaches it on another. Format: `external=internal` (e.g. `https://auth.example.com=http://keycloak:8080`). Rewrites server-to-server requests (discovery, JWKS, token exchange) but not browser redirects. |
+At least one issuer must be configured. Use any combination of the env-var shortcuts below, or the JSON-based `JWT_TRUSTED_ISSUERS` for full control. Configuration from both sources is merged.
+
+| Variable | Description |
+|----------|-------------|
+| `UA_URL` | URL of a TxState Unified Auth service. Creates a unified-auth issuer with `iss: 'unified-auth'`. |
+| `UA_URL_INTERNAL` | Internal URL of the UA service for server-to-server requests in split-horizon DNS scenarios. |
+| `OAUTH_URLS` | Comma-separated OAuth/OIDC issuer URLs (e.g. `https://accounts.google.com,https://login.microsoftonline.com/{tenant}/v2.0`). Each becomes an issuer with `iss` equal to the URL. |
+| `OAUTH_INTERNAL_URLS` | Map external OAuth issuer URLs to internal URLs for docker-compose / split-horizon DNS. Format: `external=internal,external=internal` (e.g. `https://auth.example.com=http://keycloak:8080`). Rewrites server-to-server requests (discovery, JWKS, token exchange) but not browser redirects. |
+| `JWT_SECRET` | Symmetric HMAC secret for verifying JWTs. Tokens must have `iss: 'jwt-secret'`. |
+| `JWT_PUBLIC_KEY` | PEM-encoded asymmetric public key for verifying JWTs. Tokens must have `iss: 'jwt-public-key'` (use `JWT_TRUSTED_ISSUERS` instead for another name). Literal `\n` is converted to real newlines so PEMs survive env-var encoding. |
+| `JWT_TRUSTED_AUDIENCES` | Comma-separated list of accepted `aud` values, unioned into every issuer's audience list. See [Audience Validation](#audience-validation). |
+| `JWT_TRUSTED_CLIENTIDS` | Comma-separated list of accepted `client_id` values, unioned into every issuer's client-id list. |
+| `JWT_TRUSTED_ISSUERS` | JSON array of issuer configs for advanced setups. See [Issuer JSON Config](#issuer-json-config). |
+
+### Issuer JSON Config
+`JWT_TRUSTED_ISSUERS` accepts a JSON array of objects. Each object describes one issuer:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `iss` | Yes | The `iss` claim that tokens from this issuer must carry. |
+| `type` | No | One of `oauth`, `jwks`, `unified-auth`, `publicKey`, `secret`. Inferred from other fields if omitted: `iss === 'unified-auth'` → unified-auth; `secret` → secret; `publicKey` → publicKey; `url` → jwks. Set explicitly to `oauth` to enable `.well-known` discovery. |
+| `url` | Conditional | Required for `oauth`, `jwks`, and `unified-auth`. For `oauth` it's the issuer URL (discovery is performed relative to it); for `jwks` it's the JWKS endpoint directly. |
+| `publicKey` | Conditional | PEM-encoded public key (`publicKey` type). |
+| `secret` | Conditional | Symmetric HMAC secret (`secret` type). |
+| `internalUrl` | No | Server-to-server URL prefix override for split-horizon DNS. |
+| `audiences` | No | Array of accepted `aud` values for this issuer. Unioned with `JWT_TRUSTED_AUDIENCES`. |
+| `clientIds` | No | Array of accepted `client_id` values for this issuer. Unioned with `JWT_TRUSTED_CLIENTIDS`. |
+| `validateUrl` | No | (unified-auth only) Override URL for the deauth poll. Resolved relative to `url`. Defaults to `<url>/validateToken`. |
+| `logoutUrl` | No | End-session URL surfaced as `req.auth.issuerConfig.logoutUrl`. For OAuth issuers this is auto-discovered; set only to override. Resolved relative to `url`. |
 
 ## Options
 | Option | Description |
@@ -217,14 +246,15 @@ const server = new Server({
 | `exceptRoutes` | `Set<string>` of route URLs that skip authentication entirely and do not receive an auth object. |
 | `optionalRoutes` | `Set<string>` of route URLs that do not require authentication but populate `req.auth` if a session is available. |
 | `usingOAuthCookieRoutes` | Set to true if you are using `registerOAuthCookieRoutes` with `authenticateAll`. Automatically excludes cookie endpoints from authentication requirements. |
-| `extraClaims` | A function that receives the full JWT payload and returns extra properties to merge into the auth object (e.g. `payload => ({ roles: payload.roles })`). If you use this, you should also set `OAUTH_TRUSTED_AUDIENCES`. See [Audience Validation](#audience-validation). |
+| `usingUaCookieRoutes` | Set to true if you are using `registerUaCookieRoutes` with `authenticateAll`. Automatically excludes UA cookie endpoints from authentication requirements. |
+| `extraClaims` | A function that receives the full JWT payload and returns extra properties to merge into the auth object (e.g. `payload => ({ roles: payload.roles })`). If you use this, you should also set `JWT_TRUSTED_AUDIENCES` or per-issuer `audiences`. See [Audience Validation](#audience-validation). |
 
 ## Cookie Endpoints
 For server-rendered applications or SPAs that need cookie-based sessions, `registerOAuthCookieRoutes` implements the full OAuth authorization code flow with PKCE (S256), storing the ID token in an HttpOnly cookie. The access token and refresh token are stored in separate cookies (optionally encrypted via `OAUTH_COOKIE_SECRET`). Expired ID tokens are transparently refreshed using the refresh token cookie.
 ```javascript
-import Server, { oauthAuthenticate, registerOAuthCookieRoutes } from 'fastify-txstate'
+import Server, { jwtAuthenticate, registerOAuthCookieRoutes } from 'fastify-txstate'
 const server = new Server({
-  authenticate: req => oauthAuthenticate(req, {
+  authenticate: req => jwtAuthenticate(req, {
     authenticateAll: true,
     usingOAuthCookieRoutes: true
   })
@@ -239,7 +269,7 @@ The access token is available at `req.auth.accessToken` for making requests to t
 | `loginPage` | A function for rendering a login selection page when multiple issuers are configured. See [Multiple Issuers](#multiple-issuers). |
 
 ### Multiple Issuers
-When `OAUTH_TRUSTED_ISSUERS` contains multiple issuers, you can provide a `loginPage` function to let the user choose which provider to sign in with. The function receives an array of `{ issuerUrl, redirectHref }` and should return an HTML string.
+When multiple OAuth issuers are configured (via `OAUTH_URLS` or `JWT_TRUSTED_ISSUERS`), you can provide a `loginPage` function to let the user choose which provider to sign in with. The function receives an array of `{ issuerUrl, redirectHref }` and should return an HTML string.
 ```javascript
 registerOAuthCookieRoutes(server.app, {
   loginPage: issuers => `<!DOCTYPE html>
@@ -254,8 +284,8 @@ When a user hits `/.oauthRedirect` without specifying an `issuer` query paramete
 ### Additional Environment Variables
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `OAUTH_CLIENT_ID` | Yes | OAuth client ID for the authorization code flow. |
-| `OAUTH_CLIENT_SECRET` | No | OAuth client secret. PKCE secures the code exchange, but some providers require a secret even with PKCE. |
+| `OAUTH_COOKIE_CLIENT_ID` | Yes | OAuth client ID for the authorization code flow. |
+| `OAUTH_COOKIE_CLIENT_SECRET` | No | OAuth client secret. PKCE secures the code exchange, but some providers require a secret even with PKCE. |
 | `OAUTH_COOKIE_SECRET` | No | If set, the refresh token and access token cookies are encrypted with AES-256-GCM. If not, they are stored as plaintext (still HttpOnly and Secure). |
 | `OAUTH_COOKIE_NAME` | No | Name for the session cookie. Defaults to a random hex string. |
 | `PUBLIC_URL` | No | Base URL for the API, used to generate callback URIs (e.g. `https://myapp.example.com/api`). Derived from the request hostname if not set. |
@@ -265,6 +295,17 @@ When a user hits `/.oauthRedirect` without specifying an `issuer` query paramete
 - **`GET /.oauthRedirect?requestedUrl=...&scope=...&issuer=...`** — Redirects to the OAuth provider's login page. `requestedUrl` is required and specifies where to redirect after login. `scope` is optional and defaults to `openid offline_access`. `issuer` is optional and selects which trusted issuer to use; if omitted with multiple issuers and a `loginPage` configured, a selection page is shown.
 - **`GET /.oauthCallback`** — Handles the provider's redirect. Exchanges the authorization code for tokens (using PKCE), sets the ID token, access token, and refresh token as cookies, and redirects to the original `requestedUrl`. If no ID token is returned, falls back to the access token if it is a JWT.
 - **`GET /.oauthLogout`** — Clears all OAuth cookies and redirects to the provider's `end_session_endpoint` if available, with the ID token as a hint for single sign-out.
+
+### Server-Rendered Login Redirects
+For server-rendered routes where you want to redirect unauthenticated users straight into the login flow (rather than returning a 401 and letting client code react), call `requireCookieAuthOAuth(req, res)` at the top of your handler. If `req.auth` is empty it redirects the browser through `/.oauthRedirect` (preserving the current URL as `requestedUrl`) and returns `true`; otherwise it returns `false` and your handler proceeds.
+```javascript
+import { requireCookieAuthOAuth } from 'fastify-txstate'
+server.app.get('/dashboard', async (req, res) => {
+  if (await requireCookieAuthOAuth(req, res)) return
+  // ...render the page using req.auth
+})
+```
+If you are using `registerUaCookieRoutes` for TxState Unified Auth instead of OAuth, the equivalent helper is `requireCookieAuthUa(req, res)`. (The old name `requireCookieAuth` still works but is deprecated.)
 
 ## Client-Side Authentication (without cookie endpoints)
 If you are implementing the OAuth flow in your client application instead of using the cookie endpoints above, send the token to the API as an `Authorization: Bearer <token>` header. Here is what you need to know:
@@ -435,7 +476,7 @@ server.app.register(analyticsPlugin, {
 | `ELASTICSEARCH_USEREVENTS_INDEX` | No | Index name. Defaults to `interaction-analytics`. |
 
 ## Audience Validation
-Audience validation is a way to ensure that tokens you accept were generated with your API in mind. This helps when the token's claims include authorization like role memberships specific to your app. An attacker could register their own app with identical role names and use their token for your API, unless you specify your API as the only valid audience with OAUTH_TRUSTED_AUDIENCES.
+Audience validation is a way to ensure that tokens you accept were generated with your API in mind. This helps when the token's claims include authorization like role memberships specific to your app. An attacker could register their own app with identical role names and use their token for your API, unless you specify your API as the only valid audience via `JWT_TRUSTED_AUDIENCES` (or per-issuer `audiences` in `JWT_TRUSTED_ISSUERS`).
 
 fastify-txstate is somewhat opinionated about storing authorization information in your authentication tokens. It's generally not a good idea - you'll end up with people staying in roles until their token expires, and be vulnerable to attacks like this. Let the authentication layer identify the user, and let your API match the user's identity with any authorization roles. To this end, `FastifyTxStateAuthInfo` doesn't have any spec for authorization-related claims.
 

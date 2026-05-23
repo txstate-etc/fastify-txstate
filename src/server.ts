@@ -285,6 +285,7 @@ export default class Server {
       if (['true', '1'].includes(process.env.TRUST_PROXY)) config.trustProxy = true
       else config.trustProxy = process.env.TRUST_PROXY
     }
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- ajvFormats cast is required by tsc even though eslint thinks otherwise
     config.ajv = { ...config.ajv, mode: undefined, plugins: [...(config.ajv?.plugins ?? []), ajvErrors as unknown as Plugin<unknown>, [ajvFormats as unknown as Plugin<unknown>, { mode: 'fast' }]], customOptions: { ...config.ajv?.customOptions, allErrors: true, strictSchema: false, coerceTypes: true } }
     this.healthCallback = config.checkHealth
     this.app = fastify(config)

@@ -71,8 +71,8 @@ The access token is available at `req.auth.accessToken` for provider API calls (
 ### Additional Environment Variables
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `OAUTH_CLIENT_ID` | Yes | OAuth client ID |
-| `OAUTH_CLIENT_SECRET` | No | Some providers require it even with PKCE |
+| `OAUTH_COOKIE_CLIENT_ID` | Yes | OAuth client ID |
+| `OAUTH_COOKIE_CLIENT_SECRET` | No | Some providers require it even with PKCE |
 | `OAUTH_COOKIE_SECRET` | No | Encrypts refresh/access token cookies with AES-256-GCM |
 | `OAUTH_COOKIE_NAME` | No | Session cookie name. Defaults to a random hex string |
 | `PUBLIC_URL` | No | Base URL for the API, used for callback URIs |

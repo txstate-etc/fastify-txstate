@@ -1,7 +1,7 @@
 import fastifyMultipart from '@fastify/multipart'
 import type { FromSchema } from 'json-schema-to-ts'
 import { isBlank } from 'txstate-utils'
-import Server, { type FormDataField, HttpError, analyticsPlugin, fileHandler, postFormData, registerUaCookieRoutes, requireCookieAuth, unifiedAuthenticate } from '../src/index.ts'
+import Server, { type FormDataField, HttpError, analyticsPlugin, fileHandler, postFormData, registerUaCookieRoutes, requireCookieAuthUa, unifiedAuthenticate } from '../src/index.ts'
 
 class CustomError extends Error {}
 
@@ -82,7 +82,7 @@ server.swagger().then(async () => {
     return { authenticated: req.auth!.username, sessionCreatedAt: req.auth!.sessionCreatedAt }
   })
   server.app.post('/protectedCookie', async (req, res) => {
-    if (await requireCookieAuth(req, res)) return
+    if (await requireCookieAuthUa(req, res)) return
     return { authenticated: req.auth?.username }
   })
   server.app.post('/acceptupload', async (req, res) => {
