@@ -1,7 +1,7 @@
 import fastifyMultipart from '@fastify/multipart'
 import type { FromSchema } from 'json-schema-to-ts'
 import { isBlank } from 'txstate-utils'
-import Server, { type FormDataField, HttpError, analyticsPlugin, fileHandler, postFormData, registerUaCookieRoutes, requireCookieAuthUa, unifiedAuthenticate } from '../src/index.ts'
+import Server, { type FormDataField, HttpError, analyticsPlugin, fileHandler, jwtAuthenticate, postFormData, registerUaCookieRoutes, requireCookieAuthUa } from '../src/index.ts'
 
 class CustomError extends Error {}
 
@@ -11,7 +11,7 @@ const server = new Server({
   validOriginHosts: ['subd.validhost.com'],
   validOriginSuffixes: ['proxiedhost.com'],
   checkOrigin: req => req.headers['x-auto-cors-pass'] === '1',
-  authenticate: unifiedAuthenticate
+  authenticate: jwtAuthenticate()
 })
 server.addErrorHandler(async (err, req, res) => {
   if (err instanceof CustomError) await res.status(422).send('My Custom Error')

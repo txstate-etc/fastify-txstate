@@ -1,12 +1,18 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { htmlEncode, isBlank, isNotBlank } from 'txstate-utils'
-import { getIssuerConfig, jwtAuthenticate, uaCookieName } from './jwt-auth.ts'
+import { getIssuerConfig, jwtAuthenticate, registeredExceptRoutes, registeredOptionalRoutes, uaCookieName } from './jwt-auth.ts'
 import { apiBaseUrl, uiBaseUrl, type FastifyInstanceTyped, type FastifyTxStateAuthInfo } from './server.ts'
 
 function uaServiceUrl (req: FastifyRequest) {
   return apiBaseUrl(req) + '/.uaService'
 }
 
+/**
+ * @deprecated Use `jwtAuthenticate(options)` instead. Note the new shape: `jwtAuthenticate`
+ * is now a factory that takes options up front and returns the authenticator function
+ * (`authenticate: jwtAuthenticate({ authenticateAll: true })`), so the options actually
+ * take effect when wired into `new Server({ authenticate })`.
+ */
 export async function unifiedAuthenticate (req: FastifyRequest, options?: {
   // If true, all requests require authentication, except a few routes created by fastify-txstate,
   // like /docs and /.uaService.
@@ -17,18 +23,19 @@ export async function unifiedAuthenticate (req: FastifyRequest, options?: {
   // If authenticateAll is true, you can set this to a set of routes that do not require
   // authentication, but will fill req.auth if a session is available.
   optionalRoutes?: Set<string>
-  // Set this true if you are using the registerUaCookieRoutes function and set
-  // authenticateAll to true. They will break if you don't.
+  // No longer needed — calling registerUaCookieRoutes automatically excludes its
+  // callback/redirect routes from authentication. Accepted for backward compatibility
+  // but has no effect.
   usingUaCookieRoutes?: boolean
 }): Promise<FastifyTxStateAuthInfo | undefined> {
-  return await jwtAuthenticate(req, options)
+  return await jwtAuthenticate(options)(req)
 }
 
 /**
- * @deprecated Use unifiedAuthenticate with { authenticateAll: true } instead.
+ * @deprecated Use `jwtAuthenticate({ authenticateAll: true })` instead.
  */
 export async function unifiedAuthenticateAll (req: FastifyRequest): Promise<FastifyTxStateAuthInfo> {
-  return (await unifiedAuthenticate(req, { authenticateAll: true }))!
+  return (await jwtAuthenticate({ authenticateAll: true })(req))!
 }
 
 /**
@@ -57,6 +64,10 @@ export async function requireCookieAuth (req: FastifyRequest, res: FastifyReply)
 }
 
 export function registerUaCookieRoutes (app: FastifyInstanceTyped): void {
+  registeredExceptRoutes.add('/.uaService')
+  registeredExceptRoutes.add('/.uaRedirect')
+  registeredOptionalRoutes.add('/.uaLogout')
+
   app.get(
     '/.uaLogout',
     {

@@ -515,9 +515,29 @@ async function jwtAuthenticateInternal (req: FastifyRequest, extraClaims?: (payl
   return authInfo
 }
 
+export interface JwtAuthenticateOptions {
+  /** If true, all requests require authentication, except routes listed in exceptRoutes or optionalRoutes. */
+  authenticateAll?: boolean
+  /** Routes that skip authentication entirely. They will not receive an auth object. */
+  exceptRoutes?: Set<string>
+  /** Routes that do not require authentication, but will fill req.auth if a session is available. */
+  optionalRoutes?: Set<string>
+  /** Receives the full JWT payload and returns extra properties to merge into the auth object.
+   *  If you use this, set per-issuer `audiences` to prevent tokens from other applications
+   *  carrying unexpected authorization claims. */
+  extraClaims?: (payload: JWTPayload) => Record<string, unknown>
+}
+
+// Routes contributed by registerOAuthCookieRoutes / registerUaCookieRoutes. The
+// authenticator returned by jwtAuthenticate consults these at request time so that
+// registration order (factory vs. route registration) doesn't matter.
+export const registeredExceptRoutes = new Set<string>()
+export const registeredOptionalRoutes = new Set<string>()
+
 /**
- * Authenticate requests using a JWT from the Authorization Bearer header or a session
- * cookie. Supports any mix of issuer types via the JWT_TRUSTED_ISSUERS env var:
+ * Build an `authenticate` function that validates JWTs from the Authorization Bearer
+ * header or a session cookie. Supports any mix of issuer types via the
+ * JWT_TRUSTED_ISSUERS env var:
  *
  *   - 'oauth'         — OAuth/OIDC provider with .well-known auto-discovery
  *   - 'jwks'          — JWKS endpoint URL (no discovery)
@@ -525,46 +545,32 @@ async function jwtAuthenticateInternal (req: FastifyRequest, extraClaims?: (payl
  *   - 'publicKey'     — PEM-encoded asymmetric public key
  *   - 'secret'        — symmetric HMAC secret
  *
+ * Usage:
+ *   new Server({ authenticate: jwtAuthenticate({ authenticateAll: true }) })
+ *
+ * Or with no options:
+ *   new Server({ authenticate: jwtAuthenticate() })
+ *
+ * Calling `registerOAuthCookieRoutes` or `registerUaCookieRoutes` automatically excludes
+ * their callback/redirect routes from authentication requirements and marks their logout
+ * routes as optional, so you do not need to configure that here.
+ *
  * If a refresh-token cookie is present (set by registerOAuthCookieRoutes) and the access
- * token has expired, jwtAuthenticate transparently exchanges the refresh token for a new
- * access token and queues the replacement cookies on `req.pendingOAuthCookies`. The
- * onSend hook installed by registerOAuthCookieRoutes flushes those cookies onto the
- * response.
+ * token has expired, the returned authenticator transparently exchanges the refresh
+ * token for a new access token and queues the replacement cookies on
+ * `req.pendingOAuthCookies`. The onSend hook installed by registerOAuthCookieRoutes
+ * flushes those cookies onto the response.
  */
-export async function jwtAuthenticate (req: FastifyRequest, options?: {
-  /** If true, all requests require authentication, except routes listed in exceptRoutes or optionalRoutes. */
-  authenticateAll?: boolean
-  /** Routes that skip authentication entirely. They will not receive an auth object. */
-  exceptRoutes?: Set<string>
-  /** Routes that do not require authentication, but will fill req.auth if a session is available. */
-  optionalRoutes?: Set<string>
-  /** Set this true if you are using registerOAuthCookieRoutes and authenticateAll. */
-  usingOAuthCookieRoutes?: boolean
-  /** Set this true if you are using registerUaCookieRoutes and authenticateAll. */
-  usingUaCookieRoutes?: boolean
-  /** Receives the full JWT payload and returns extra properties to merge into the auth object.
-   *  If you use this, set per-issuer `audiences` to prevent tokens from other applications
-   *  carrying unexpected authorization claims. */
-  extraClaims?: (payload: JWTPayload) => Record<string, unknown>
-}): Promise<FastifyTxStateAuthInfo | undefined> {
-  if (options?.usingOAuthCookieRoutes) {
-    options.exceptRoutes ??= new Set<string>()
-    options.exceptRoutes.add('/.oauthCallback')
-    options.exceptRoutes.add('/.oauthRedirect')
-    options.optionalRoutes ??= new Set<string>()
-    options.optionalRoutes.add('/.oauthLogout')
+export function jwtAuthenticate (options?: JwtAuthenticateOptions): (req: FastifyRequest) => Promise<FastifyTxStateAuthInfo | undefined> {
+  const exceptRoutes = new Set(options?.exceptRoutes)
+  const optionalRoutes = new Set(options?.optionalRoutes)
+  return async (req: FastifyRequest) => {
+    const url = req.routeOptions.url!
+    if (exceptRoutes.has(url) || registeredExceptRoutes.has(url)) return undefined
+    const auth = await jwtAuthenticateInternal(req, options?.extraClaims)
+    if (options?.authenticateAll && !optionalRoutes.has(url) && !registeredOptionalRoutes.has(url) && isBlank(auth?.username)) {
+      throw new Error('Request requires authentication.')
+    }
+    return auth
   }
-  if (options?.usingUaCookieRoutes) {
-    options.exceptRoutes ??= new Set<string>()
-    options.exceptRoutes.add('/.uaService')
-    options.exceptRoutes.add('/.uaRedirect')
-    options.optionalRoutes ??= new Set<string>()
-    options.optionalRoutes.add('/.uaLogout')
-  }
-  if (options?.exceptRoutes?.has(req.routeOptions.url!)) return undefined
-  const auth = await jwtAuthenticateInternal(req, options?.extraClaims)
-  if (options?.authenticateAll && !options.optionalRoutes?.has(req.routeOptions.url!) && isBlank(auth?.username)) {
-    throw new Error('Request requires authentication.')
-  }
-  return auth
 }

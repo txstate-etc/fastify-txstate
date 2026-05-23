@@ -10,6 +10,8 @@ import {
   init,
   oauthCookieName,
   refreshCookieName,
+  registeredExceptRoutes,
+  registeredOptionalRoutes,
   toInternalUrl,
   wrapRefreshToken
 } from './jwt-auth.ts'
@@ -68,6 +70,10 @@ export function registerOAuthCookieRoutes (app: FastifyInstanceTyped, options?: 
   if (!clientId) throw new Error('OAUTH_COOKIE_CLIENT_ID environment variable must be set when using registerOAuthCookieRoutes.')
   init()
   const clientSecret = process.env.OAUTH_COOKIE_CLIENT_SECRET
+
+  registeredExceptRoutes.add('/.oauthCallback')
+  registeredExceptRoutes.add('/.oauthRedirect')
+  registeredOptionalRoutes.add('/.oauthLogout')
 
   const callbackPath = '/.oauthCallback'
 

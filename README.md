@@ -205,7 +205,7 @@ For providers like Google that issue opaque access tokens, have the client send 
 ```javascript
 import Server, { jwtAuthenticate } from 'fastify-txstate'
 const server = new Server({
-  authenticate: req => jwtAuthenticate(req, { authenticateAll: true })
+  authenticate: jwtAuthenticate({ authenticateAll: true })
 })
 ```
 ## Environment Variables
@@ -245,19 +245,16 @@ At least one issuer must be configured. Use any combination of the env-var short
 | `authenticateAll` | If true, all requests require authentication except routes in `exceptRoutes` or `optionalRoutes`. |
 | `exceptRoutes` | `Set<string>` of route URLs that skip authentication entirely and do not receive an auth object. |
 | `optionalRoutes` | `Set<string>` of route URLs that do not require authentication but populate `req.auth` if a session is available. |
-| `usingOAuthCookieRoutes` | Set to true if you are using `registerOAuthCookieRoutes` with `authenticateAll`. Automatically excludes cookie endpoints from authentication requirements. |
-| `usingUaCookieRoutes` | Set to true if you are using `registerUaCookieRoutes` with `authenticateAll`. Automatically excludes UA cookie endpoints from authentication requirements. |
 | `extraClaims` | A function that receives the full JWT payload and returns extra properties to merge into the auth object (e.g. `payload => ({ roles: payload.roles })`). If you use this, you should also set `JWT_TRUSTED_AUDIENCES` or per-issuer `audiences`. See [Audience Validation](#audience-validation). |
+
+Calling `registerOAuthCookieRoutes` or `registerUaCookieRoutes` automatically excludes their callback/redirect routes from authentication and marks their logout routes as optional, so you do not need to list them here.
 
 ## Cookie Endpoints
 For server-rendered applications or SPAs that need cookie-based sessions, `registerOAuthCookieRoutes` implements the full OAuth authorization code flow with PKCE (S256), storing the ID token in an HttpOnly cookie. The access token and refresh token are stored in separate cookies (optionally encrypted via `OAUTH_COOKIE_SECRET`). Expired ID tokens are transparently refreshed using the refresh token cookie.
 ```javascript
 import Server, { jwtAuthenticate, registerOAuthCookieRoutes } from 'fastify-txstate'
 const server = new Server({
-  authenticate: req => jwtAuthenticate(req, {
-    authenticateAll: true,
-    usingOAuthCookieRoutes: true
-  })
+  authenticate: jwtAuthenticate({ authenticateAll: true })
 })
 registerOAuthCookieRoutes(server.app)
 ```
