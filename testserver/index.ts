@@ -63,7 +63,8 @@ server.swagger().then(async () => {
   })
   server.app.get('/shutdown', async (req, res) => {
     await res.send('OK')
-    await server.close(5000)
+    await server.close(0.5)
+    process.exit()
   })
   server.app.get('/proxy', async (req, res) => ({ protocol: req.protocol, host: req.host, hostname: req.hostname }))
   server.app.get('/logging', async (req, res) => {

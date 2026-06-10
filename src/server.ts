@@ -547,7 +547,7 @@ this is log into this application and use dev tools to pull your token from the 
     process.removeListener('SIGINT', this.sigHandler)
     if (softSeconds) {
       this.shuttingDown = true
-      await sleep(softSeconds)
+      await sleep(softSeconds * 1000)
     }
     await this.app.close()
   }
