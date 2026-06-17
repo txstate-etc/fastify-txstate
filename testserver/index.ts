@@ -71,6 +71,7 @@ server.swagger().then(async () => {
     res.extraLogInfo = { hello: 'world' }
     return { success: true }
   })
+  server.app.get<{ Querystring: { id: number } }>('/coerce', { schema: { querystring: { type: 'object', properties: { id: { type: 'number' } }, required: ['id'] }, response: { 200: { type: 'object', properties: { id: { type: 'number' } } } } } }, (req, res) => ({ id: req.query.id }))
   server.app.post<{ Body: TypedInputRecursive }>('/typed', { schema: { body: typedInputRecursive, response: { 200: { type: 'string' } } } }, (req, res) => req.body.str)
   server.app.post<{ Body: TypedInputRecursive }>('/numtyped', { schema: { body: typedInputRecursive, response: { 200: { type: 'object', properties: { num: { type: 'number' } } } } } }, (req, res) => ({ num: req.body.num }))
   server.app.post<{ Body: TypedInputRecursive }>('/badtyped', { schema: { body: typedInputRecursive, response: { 200: { type: 'integer' } } } }, (req, res) => 5.5)

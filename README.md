@@ -84,12 +84,23 @@ server.app.post('/users', {
 When a route has a `body` schema, we automatically add 400 and 422 response schemas for validation errors, so those don't need to be specified manually.
 
 ## Schema Validation vs. Business Validation
-We configure Ajv with `coerceTypes`, `allErrors`, `ajv-formats` (for `date-time`, `email`, `uri`, etc.), and `ajv-errors` (for custom `errorMessage` strings). `strictSchema` is off, so OpenAPI properties like `example` and `description` won't cause errors.
-
 An important design point: **schema validation is for catching client bugs, not user mistakes.** When the schema rejects a request, the user gets a generic 400 — not a friendly inline message on a form field. If you want the user to see "Name is required" next to the name input, don't put `required: ['name']` in the schema. Instead, make it optional in the schema and check it in your route handler with a `ValidationMessage` (see [Error Handling](#error-handling)). Reserve schema-level `required`, `pattern`, and `format` for things the client is responsible for, like ensuring dates are in ISO format.
 
+## Ajv Configuration
+We configure Ajv with `allErrors`, `ajv-formats` (for `date-time`, `email`, `uri`, etc.), and `ajv-errors` (for custom `errorMessage` strings). `strictSchema` is off, so OpenAPI properties like `example` and `description` won't cause errors.
+
+### Type coercion
+Querystrings, URL params, and headers always arrive as strings. To let `?id=123` validate against a schema like `{ type: 'number' }`, we run those parts (plus response validation) through a validator that *coerces* values — the string `"123"` is converted to the number `123` to satisfy the schema. Request bodies are validated strictly: a JSON `"123"` will be rejected by a `number` field rather than silently converted, since that would hide bugs in your client code.
+
+Pass `coerceAll: false` to disable coercion everywhere, or `coerceAll: true` to coerce bodies too. If you need finer control (e.g. strict response validation, or one part coerced and another not), two Ajv instances are exposed — `server.ajvStrict` (no coercion) and `server.ajvCoerce` (coercion on) — already wired with formats/errors plugins. Swap them in via `setValidatorCompiler` or the included `buildSerializerCompiler` helper:
+```typescript
+const server = new Server()
+// Validate responses strictly while keeping querystring coercion on:
+server.app.setSerializerCompiler(server.buildSerializerCompiler(server.ajvStrict))
+```
+
 ## SchemaObject Type
-If you define schemas as standalone objects, you can take advantage of the `SchemaObject` exported by `@txstate-mws/fastify-shared`. It extends JSON Schema with OpenAPI properties (`example`, `description`) and `ajv-errors` support (`errorMessage`). Add `as const satisfies SchemaObject` to the end of your object before you start filling it with properties and you'll
+If you define schemas as standalone objects, you can take advantage of the `SchemaObject` exported by `@txstate-mws/fastify-shared`. It extends JSON Schema with OpenAPI properties (`example`, `description`) and `ajv-errors` support (`errorMessage`), so that you can customize the swagger documentation. Add `as const satisfies SchemaObject` to the end of your object before you start filling it with properties and you'll
 get autocomplete support in your IDE and confidence that your schema is compliant.
 ```typescript
 import type { SchemaObject } from '@txstate-mws/fastify-shared'

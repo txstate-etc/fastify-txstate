@@ -226,10 +226,26 @@ describe('fastify-txstate', () => {
       })
       expect(resp.data.num === 0).to.be.false
     })
+    it('should coerce querystring values to the declared schema type', async () => {
+      const resp = await client.get('/coerce?id=123')
+      expect(resp.data.id).to.equal(123)
+    })
+    it('should not coerce JSON body values to the declared schema type', async () => {
+      try {
+        await client.post('/typed', {
+          str: 'hello',
+          num: '4.3'
+        })
+        expect.fail('should have thrown')
+      } catch (e: any) {
+        if (e.response == null) throw e
+        expect(e.response.status).to.equal(400)
+      }
+    })
     it('should reject a mis-typed payload with a 400 status', async () => {
       try {
         await client.post('/typed', {
-          str: 3,
+          str: 'hello',
           num: 4.3,
           int: 5.5
         })

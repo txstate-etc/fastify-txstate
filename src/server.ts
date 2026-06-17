@@ -1,4 +1,4 @@
-import { Ajv, type Plugin } from 'ajv'
+import { Ajv, type Options as AjvOptions, type Plugin } from 'ajv'
 import swagger, { type FastifyDynamicSwaggerOptions } from '@fastify/swagger'
 import swaggerUI, { type FastifySwaggerUiOptions } from '@fastify/swagger-ui'
 import type { JsonSchemaToTsProvider } from '@fastify/type-provider-json-schema-to-ts'
@@ -148,6 +148,23 @@ export interface FastifyTxStateOptions extends Partial<FastifyServerOptions> {
    * If this function throws, the client will receive a 401 response.
    */
   authenticate?: (req: FastifyRequest) => Promise<FastifyTxStateAuthInfo | undefined>
+  /**
+   * Controls Ajv's `coerceTypes` setting across the validators and response serializer.
+   *
+   * - `undefined` (default): coerce `querystring`, `params`, `headers`, and responses, but
+   *   not body. This lets `?id=123` validate against `{ type: 'number' }` and lets handlers
+   *   return numeric values from database drivers that emit them as strings (e.g. Postgres
+   *   `BIGINT`/`NUMERIC`), while keeping body validation strict so a numeric string can't
+   *   sneak past a `number` field and mask a client bug.
+   * - `false`: never coerce anywhere.
+   * - `true`: always coerce, including body.
+   *
+   * Any `coerceTypes` value in `config.ajv.customOptions` is ignored, except that
+   * `coerceTypes: true` there is treated as a default of `coerceAll: true` when this is
+   * undefined. For finer control (e.g. `'array'` only on certain parts) override the
+   * validator or serializer compiler directly using `ajvStrict` / `ajvCoerce`.
+   */
+  coerceAll?: boolean
 }
 
 declare module 'fastify' {
@@ -256,6 +273,21 @@ export default class Server {
   protected originChecker = new OriginChecker()
   protected swaggerEndpoint: string | undefined
   public app: FastifyInstanceTyped
+  /**
+   * The Ajv instance with `coerceTypes: false`, used for body validation by default (and
+   * for response/non-body validation when `coerceAll: false` was passed). Exposed so
+   * consumers can override Fastify's validator or serializer compilers without
+   * re-registering plugins (e.g. to make response validation strict while leaving
+   * querystring coercion on, call
+   * `server.app.setSerializerCompiler(server.buildSerializerCompiler(server.ajvStrict))`).
+   */
+  public ajvStrict!: Ajv
+  /**
+   * The Ajv instance with `coerceTypes: true`, used for querystring/params/headers and
+   * response validation by default (and for body validation when `coerceAll: true` was
+   * passed). See `ajvStrict` for how to reuse either instance in a custom compiler.
+   */
+  public ajvCoerce!: Ajv
 
   constructor (protected config: FastifyTxStateOptions & {
     http2?: true
@@ -286,7 +318,7 @@ export default class Server {
       else config.trustProxy = process.env.TRUST_PROXY
     }
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- ajvFormats cast is required by tsc even though eslint thinks otherwise
-    config.ajv = { ...config.ajv, mode: undefined, plugins: [...(config.ajv?.plugins ?? []), ajvErrors as unknown as Plugin<unknown>, [ajvFormats as unknown as Plugin<unknown>, { mode: 'fast' }]], customOptions: { ...config.ajv?.customOptions, allErrors: true, strictSchema: false, coerceTypes: true } }
+    config.ajv = { ...config.ajv, mode: undefined, plugins: [...(config.ajv?.plugins ?? []), ajvErrors as unknown as Plugin<unknown>, [ajvFormats as unknown as Plugin<unknown>, { mode: 'fast' }]], customOptions: { ...config.ajv?.customOptions, allErrors: true, strictSchema: false } }
     this.healthCallback = config.checkHealth
     this.app = fastify(config)
     this.app.addHook('onRoute', route => {
@@ -310,29 +342,42 @@ export default class Server {
       done()
     })
 
+    // Build our own Ajv instances so we can apply type coercion selectively. Coercing inside a
+    // JSON body is usually harmful (e.g. a stringy "123" sneaking past a `number` field), but
+    // it's necessary for querystring/params/headers since those always arrive as strings, and
+    // it's pragmatic on responses since database drivers commonly return numeric/decimal types
+    // as strings.
+    const buildAjv = (customOptions: AjvOptions) => {
+      const inst = new Ajv(customOptions)
+      for (const pluginConfig of config.ajv!.plugins ?? []) {
+        const [plugin, opts] = toArray(pluginConfig)
+        plugin(inst, opts) // eslint-disable-line @typescript-eslint/no-unsafe-call -- plugin type comes from fastify's ajv config
+      }
+      return inst
+    }
+    // Ignore any `coerceTypes` already in customOptions when constructing the instances —
+    // we set it explicitly based on coerceAll. As a convenience, an explicit `coerceTypes: true`
+    // there acts as the default for coerceAll when coerceAll itself is undefined.
+    const baseAjvOpts: AjvOptions = { ...config.ajv.customOptions }
+    delete baseAjvOpts.coerceTypes
+    this.ajvStrict = buildAjv({ ...baseAjvOpts, coerceTypes: false })
+    this.ajvCoerce = buildAjv({ ...baseAjvOpts, coerceTypes: true })
+    const coerceAll = config.coerceAll ?? (config.ajv.customOptions?.coerceTypes === true ? true : undefined)
+    let ajvBody = this.ajvStrict
+    let ajvNonBody = this.ajvCoerce
+    if (coerceAll === true) {
+      ajvBody = this.ajvCoerce
+    } else if (coerceAll === false) {
+      ajvNonBody = this.ajvStrict
+    }
+    this.app.setValidatorCompiler(({ schema, httpPart }) => {
+      const inst = httpPart === 'body' ? ajvBody : ajvNonBody
+      return inst.compile(schema)
+    })
     // use Ajv to validate responses instead of @fastify/json-fast-stringify since ajv does
     // a better job with recursive types and we don't want to have different behavior between
     // input and output validation
-    const ajv = new Ajv(config.ajv.customOptions)
-    for (const pluginConfig of config.ajv.plugins ?? []) {
-      const [plugin, opts] = toArray(pluginConfig)
-      plugin(ajv, opts) // eslint-disable-line @typescript-eslint/no-unsafe-call -- plugin type comes from fastify's ajv config
-    }
-    this.app.setSerializerCompiler(route => {
-      const schema: JSONSchema | undefined = route.schema
-      const validate = schema == null ? ajv.compile({ type: 'object' }) : ajv.compile(schema) // eslint-disable-line @typescript-eslint/no-unnecessary-condition -- schema can be undefined at runtime
-      return data => {
-        /**
-         * Ajv unfortunately treats optional properties as non-nullable, so they're allowed to
-         * be undefined but not allowed to be null. Worse, with `coerceTypes`, null will be converted
-         * to empty string or 0 or false. This is silly behavior, so we're converting all nulls to
-         * undefined before we validate.
-         */
-        if (schema != null) destroyNulls(stringifyDates(data)) // eslint-disable-line @typescript-eslint/no-unnecessary-condition -- schema can be undefined at runtime
-        if (!validate(data)) throw new Error('Output validation failed. ' + validate.errors?.[0].instancePath + ': ' + validate.errors?.[0].message)
-        return JSON.stringify(data)
-      }
-    })
+    this.app.setSerializerCompiler(this.buildSerializerCompiler(ajvNonBody))
 
     this.app.addHook('onRequest', (req, res, done) => {
       res.extraLogInfo = {}
@@ -454,6 +499,32 @@ export default class Server {
     }
     process.on('SIGTERM', this.sigHandler)
     process.on('SIGINT', this.sigHandler)
+  }
+
+  /**
+   * Build a Fastify serializer compiler that uses the given Ajv instance for response
+   * validation. Used internally to wire up the default serializer, and exposed so consumers
+   * can override it without losing our null/Date preprocessing — e.g. to make response
+   * validation strict while keeping querystring coercion on, do:
+   *
+   *     server.app.setSerializerCompiler(server.buildSerializerCompiler(server.ajvStrict))
+   */
+  public buildSerializerCompiler (ajv: Ajv) {
+    return (route: { schema?: JSONSchema }) => {
+      const schema = route.schema
+      const validate = schema == null ? ajv.compile({ type: 'object' }) : ajv.compile(schema)
+      return (data: unknown) => {
+        /**
+         * Ajv unfortunately treats optional properties as non-nullable, so they're allowed to
+         * be undefined but not allowed to be null. Worse, with `coerceTypes`, null will be converted
+         * to empty string or 0 or false. This is silly behavior, so we're converting all nulls to
+         * undefined before we validate.
+         */
+        if (schema != null) destroyNulls(stringifyDates(data))
+        if (!validate(data)) throw new Error('Output validation failed. ' + validate.errors?.[0].instancePath + ': ' + validate.errors?.[0].message)
+        return JSON.stringify(data)
+      }
+    }
   }
 
   public async start (port?: number) {
