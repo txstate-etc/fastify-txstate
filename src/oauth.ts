@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { decodeJwt } from 'jose'
 import { htmlEncode, isBlank, isNotBlank } from 'txstate-utils'
-import { apiBaseUrl, uiBaseUrl, type FastifyInstanceTyped } from './server.ts'
+import { apiBaseUrl, registeredExceptRoutes, registeredOptionalRoutes, uiBaseUrl, type FastifyInstanceTyped } from './server.ts'
 import {
   accessTokenCookieName,
   getOAuthDiscovery,
@@ -10,8 +10,6 @@ import {
   init,
   oauthCookieName,
   refreshCookieName,
-  registeredExceptRoutes,
-  registeredOptionalRoutes,
   toInternalUrl,
   wrapRefreshToken
 } from './jwt-auth.ts'

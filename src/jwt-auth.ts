@@ -528,12 +528,6 @@ export interface JwtAuthenticateOptions {
   extraClaims?: (payload: JWTPayload) => Record<string, unknown>
 }
 
-// Routes contributed by registerOAuthCookieRoutes / registerUaCookieRoutes. The
-// authenticator returned by jwtAuthenticate consults these at request time so that
-// registration order (factory vs. route registration) doesn't matter.
-export const registeredExceptRoutes = new Set<string>()
-export const registeredOptionalRoutes = new Set<string>()
-
 /**
  * Build an `authenticate` function that validates JWTs from the Authorization Bearer
  * header or a session cookie. Supports any mix of issuer types via the
@@ -566,9 +560,9 @@ export function jwtAuthenticate (options?: JwtAuthenticateOptions): (req: Fastif
   const optionalRoutes = new Set(options?.optionalRoutes)
   return async (req: FastifyRequest) => {
     const url = req.routeOptions.url!
-    if (exceptRoutes.has(url) || registeredExceptRoutes.has(url)) return undefined
+    if (exceptRoutes.has(url)) return undefined
     const auth = await jwtAuthenticateInternal(req, options?.extraClaims)
-    if (options?.authenticateAll && !optionalRoutes.has(url) && !registeredOptionalRoutes.has(url) && isBlank(auth?.username)) {
+    if (options?.authenticateAll && !optionalRoutes.has(url) && isBlank(auth?.username)) {
       throw new Error('Request requires authentication.')
     }
     return auth

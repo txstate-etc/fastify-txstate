@@ -1,7 +1,7 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { htmlEncode, isBlank, isNotBlank } from 'txstate-utils'
-import { getIssuerConfig, jwtAuthenticate, registeredExceptRoutes, registeredOptionalRoutes, uaCookieName } from './jwt-auth.ts'
-import { apiBaseUrl, uiBaseUrl, type FastifyInstanceTyped, type FastifyTxStateAuthInfo } from './server.ts'
+import { getIssuerConfig, jwtAuthenticate, uaCookieName } from './jwt-auth.ts'
+import { apiBaseUrl, registeredExceptRoutes, registeredOptionalRoutes, uiBaseUrl, type FastifyInstanceTyped, type FastifyTxStateAuthInfo } from './server.ts'
 
 function uaServiceUrl (req: FastifyRequest) {
   return apiBaseUrl(req) + '/.uaService'

@@ -16,6 +16,14 @@ import type { OpenAPIV3 } from 'openapi-types'
 import { clone, destroyNulls, isBlank, isNotBlank, omit, set, sleep, stringifyDates, toArray } from 'txstate-utils'
 import { HttpError, ValidationError, ValidationErrors, fstValidationToMessage } from './error.ts'
 
+// Routes contributed by registerOAuthCookieRoutes / registerUaCookieRoutes. The Server's
+// onRequest auth hook consults these at request time — except routes skip authentication
+// entirely, optional routes suppress the 401 when `authenticate` throws — so that
+// registration order (factory vs. route registration) doesn't matter and the behavior holds
+// regardless of which `authenticate` function the app provides.
+export const registeredExceptRoutes = new Set<string>()
+export const registeredOptionalRoutes = new Set<string>()
+
 type ErrorHandler = (error: Error, req: FastifyRequest, res: FastifyReply) => Promise<void>
 
 /**
@@ -417,10 +425,14 @@ export default class Server {
         DELETE: true
       }
       this.app.addHook('onRequest', async (req, res) => {
-        if (!authenticatedMethods[req.method] || isBlank(req.routeOptions.url) || req.routeOptions.url === '/health' || req.routeOptions.url === '/.uaService' || (this.swaggerEndpoint && req.routeOptions.url.startsWith(this.swaggerEndpoint))) return
+        if (!authenticatedMethods[req.method] || isBlank(req.routeOptions.url) || req.routeOptions.url === '/health' || registeredExceptRoutes.has(req.routeOptions.url) || (this.swaggerEndpoint && req.routeOptions.url.startsWith(this.swaggerEndpoint))) return
         try {
           req.auth = await config.authenticate!(req)
         } catch (e: any) {
+          // optional routes (e.g. logout endpoints contributed by registerOAuthCookieRoutes /
+          // registerUaCookieRoutes) must remain reachable without valid auth, regardless of
+          // which `authenticate` function the app provided, so swallow its throw here.
+          if (registeredOptionalRoutes.has(req.routeOptions.url)) return
           await res.status(401).send('Failed to authenticate.')
           return await res
         }

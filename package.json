@@ -1,6 +1,6 @@
 {
   "name": "fastify-txstate",
-  "version": "4.0.2",
+  "version": "4.0.3",
   "description": "A small wrapper for fastify providing a set of common conventions & utility functions we use.",
   "type": "module",
   "exports": {
