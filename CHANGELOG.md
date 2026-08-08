@@ -1,5 +1,18 @@
 # Changelog
 
+## 4.1.0
+
+### New Features
+
+- `postFormData` now accepts an async iterable of fields in addition to an array. This is for proxying an incoming multipart request through to another server: `@fastify/multipart` will not yield the next part until the current part's file stream has been consumed, so collecting the parts into an array before posting hangs the request forever. With an async iterable, `postFormData` pulls each field only after the previous one has been fully sent, which is exactly the order the parts iterator needs — files of any size flow through without being buffered. Note that this mode cannot set a `Content-Length` header; the request goes out with chunked transfer encoding. If you know all of your fields up front, keep using an array with `filesize` set on each file field — file contents are streamed either way.
+- New `formDataFieldsFromParts` helper converts the parts iterator from `@fastify/multipart`'s `request.parts()` into the async iterable that `postFormData` accepts, so proxying an upload is one line: `await postFormData(url, formDataFieldsFromParts(req.parts()))`. It is typed structurally, so this library still has no dependency on `@fastify/multipart`.
+- New `formDataFilesFromParts` helper does the same but forwards only the files, for when the request's text fields were meant for your server and the destination only needs the upload itself.
+
+### Fixes
+
+- `postFormData` computed a `Content-Length` that omitted the closing boundary whenever every field had a known size (an all-text form, or `filesize` provided on every file field). undici refuses to send a body that disagrees with its `Content-Length` header, so those requests failed with `UND_ERR_REQ_CONTENT_LENGTH_MISMATCH`.
+- Fixed a race in `postFormData`'s body stream that could permanently stall the request partway through a larger upload. Small payloads usually won the race, which is why our tests never caught it.
+
 ## 4.0.0
 
 ### Breaking Changes

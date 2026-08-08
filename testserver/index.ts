@@ -1,7 +1,7 @@
 import fastifyMultipart from '@fastify/multipart'
 import type { FromSchema } from 'json-schema-to-ts'
 import { isBlank } from 'txstate-utils'
-import Server, { type FormDataField, HttpError, analyticsPlugin, fileHandler, jwtAuthenticate, postFormData, registerUaCookieRoutes, requireCookieAuthUa } from '../src/index.ts'
+import Server, { HttpError, analyticsPlugin, fileHandler, formDataFieldsFromParts, formDataFilesFromParts, jwtAuthenticate, postFormData, registerUaCookieRoutes, requireCookieAuthUa } from '../src/index.ts'
 
 class CustomError extends Error {}
 
@@ -89,24 +89,31 @@ server.swagger().then(async () => {
   })
   server.app.post('/acceptupload', async (req, res) => {
     let contentLength = 0
+    let files = 0
+    let textFields = 0
     for await (const part of req.parts()) {
       if (part.type === 'file') {
+        files += 1
         for await (const chunk of part.file) {
           contentLength += chunk.length
         }
+      } else {
+        textFields += 1
       }
     }
-    return { received: contentLength }
+    return { received: contentLength, files, textFields }
   })
   server.app.post('/proxymultipart', async (req, res) => {
     if (req.isMultipart()) {
-      const fields: FormDataField[] = []
-      for await (const part of req.parts()) {
-        if (part.type === 'file') {
-          fields.push({ name: part.fieldname, value: part.file, filename: part.filename, filetype: part.mimetype })
-        }
-      }
-      const resp = await postFormData('http://fastify-http/acceptupload', fields)
+      const resp = await postFormData('http://fastify-http/acceptupload', formDataFieldsFromParts(req.parts()))
+      return await resp.json()
+    } else {
+      throw new HttpError(400, 'Expected multipart/form-data')
+    }
+  })
+  server.app.post('/proxymultipartfiles', async (req, res) => {
+    if (req.isMultipart()) {
+      const resp = await postFormData('http://fastify-http/acceptupload', formDataFilesFromParts(req.parts()))
       return await resp.json()
     } else {
       throw new HttpError(400, 'Expected multipart/form-data')
