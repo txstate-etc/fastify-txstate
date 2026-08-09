@@ -257,6 +257,7 @@ At least one issuer must be configured. Use any combination of the env-var short
 | `exceptRoutes` | `Set<string>` of route URLs that skip authentication entirely and do not receive an auth object. |
 | `optionalRoutes` | `Set<string>` of route URLs that do not require authentication but populate `req.auth` if a session is available. |
 | `extraClaims` | A function that receives the full JWT payload and returns extra properties to merge into the auth object (e.g. `payload => ({ roles: payload.roles })`). If you use this, you should also set `JWT_TRUSTED_AUDIENCES` or per-issuer `audiences`. See [Audience Validation](#audience-validation). |
+| `protectedResourceMetadata` | Extra fields for the RFC 9728 discovery document, or `false` to disable it. See [Protected Resource Metadata](#protected-resource-metadata). |
 
 Calling `registerOAuthCookieRoutes` or `registerUaCookieRoutes` automatically excludes their callback/redirect routes from authentication and marks their logout routes as optional, so you do not need to list them here.
 
@@ -339,6 +340,54 @@ The client is responsible for refreshing tokens before they expire and sending a
 
 ### PKCE
 Use PKCE (S256) for the authorization code exchange even if your provider doesn't require it. Generate a `code_verifier`, send the `code_challenge` in the authorization request, and include the `code_verifier` when exchanging the code for tokens. This protects against authorization code interception and is supported by all major providers.
+
+## Protected Resource Metadata
+A client that has never seen your API has a bootstrapping problem: before it can get a token, it has to figure out which authorization server your API trusts. [RFC 9728](https://www.rfc-editor.org/rfc/rfc9728) solves this with a discovery document served at `/.well-known/oauth-protected-resource` — this is how MCP clients, among others, find their way to a login page.
+
+We serve it automatically. When the server starts, if the `jwtAuthenticate` factory has been called and there is something to advertise — trusted OAuth issuers, cookie login routes, or both — the route answers with a document built from the same configuration that drives token verification:
+```json
+{
+  "resource": "https://myapp.example.com/api",
+  "authorization_servers": ["https://auth.example.com"],
+  "bearer_methods_supported": ["header"],
+  "cookie_login_uri": "https://myapp.example.com/api/.oauthRedirect",
+  "cookie_logout_uri": "https://myapp.example.com/api/.oauthLogout"
+}
+```
+`authorization_servers` lists your `OAUTH_URLS` and any `type: 'oauth'` entries in `JWT_TRUSTED_ISSUERS`. Issuers of other types (unified-auth, raw JWKS, secrets, public keys) are left out because they aren't authorization servers a client could discover and log in with. `cookie_login_uri` and `cookie_logout_uri` appear when `registerOAuthCookieRoutes` or `registerUaCookieRoutes` has been called — they are our own extension fields, not part of the RFC, so conformant OAuth clients simply ignore them (see the note about first-party SPAs below for why they exist). If there is nothing to advertise at all — no OAuth issuers, no cookie routes — or `jwtAuthenticate` was never set up, the route is not registered and the path returns 404, rather than advertise a login setup that doesn't exist.
+
+While the route is being served, every 401 response also carries a `WWW-Authenticate: Bearer resource_metadata="..."` header pointing at the document, as the RFC prescribes, so a client can discover everything by making one unauthenticated request and following the pointer.
+
+If you'd rather serve your own metadata document, just declare the route before calling `server.start()` — we only register ours if the path is still free, and the 401 header will point at yours. The one case that needs configuration is declaring the route inside an encapsulated fastify plugin, which we can't see at registration time: pass `protectedResourceMetadata: false` to `jwtAuthenticate` and we'll stay out of the way entirely (this also suppresses the `WWW-Authenticate` pointer).
+
+The RFC recommends two fields we can't infer: `scopes_supported` (which scopes a client should request for your API) and `resource_name` (a human-readable name for consent screens). Pass them — or any other RFC 9728 field — in the `jwtAuthenticate` options, using the RFC's snake_case names:
+```javascript
+const server = new Server({
+  authenticate: jwtAuthenticate({
+    authenticateAll: true,
+    protectedResourceMetadata: {
+      resource_name: 'My Application API',
+      scopes_supported: ['openid', 'profile']
+    }
+  })
+})
+```
+Fields you pass win over the automatic ones, so this is also the escape hatch if the derived `resource` identifier is wrong for your deployment — or if you need to supply `authorization_servers` yourself, e.g. when you verify tokens against a `jwks` or `publicKey` issuer (which we can't advertise, since they aren't discoverable authorization servers) but clients still need to know where to log in.
+
+### Note about first-party SPAs
+A compiled SPA served as static files can't easily receive environment variables. The metadata document lets your SPA take all its cues from the API instead:
+
+1. The page makes any API request and gets a 401 with the `WWW-Authenticate` header.
+2. The client fetches the `resource_metadata` URL from that header.
+3. If the document has `cookie_login_uri`, navigate the browser there with a `requestedUrl` query parameter naming the page to return to after login. Done — the API's cookie routes run the whole flow and the session lands in an HttpOnly cookie.
+4. Only if there is no `cookie_login_uri` should a browser client consider `authorization_servers` and running the OAuth flow.
+
+Logout is discoverable the same way: navigate the browser to `cookie_logout_uri` and the API clears its cookies and redirects through the provider's logout when it has one (logout accepts an optional `returnUrl` query parameter).
+
+Prefer the cookie flow in shared browser code whenever it's offered: it needs zero client-side configuration and keeps tokens out of reach of injected scripts.
+
+### Note about reverse proxies and base paths
+If your API is proxied underneath a base path (say `https://myapp.example.com/api`), be aware that the RFC puts the canonical metadata URL at the *domain root* with the path appended — `https://myapp.example.com/.well-known/oauth-protected-resource/api` — not underneath your base path. Clients that construct the URL themselves (instead of reading the `WWW-Authenticate` header of a 401) will look there and never hit your app. To handle them, make sure your proxy forwards `/.well-known/oauth-protected-resource` and everything under it to the API unchanged. We accept the path-suffix form and serve the same document for it, so no rewriting is needed. Clients that follow the `WWW-Authenticate` pointer instead will find the copy underneath your base path without any proxy help.
 
 # Streaming File Proxy with postFormData
 When your API receives a file upload and needs to forward it to another service, you typically have to buffer the entire file in memory or write it to disk first. The `postFormData` helper avoids this by constructing a multipart/form-data request from streams, allowing you to pipe an incoming upload directly to a remote API with no intermediate storage.

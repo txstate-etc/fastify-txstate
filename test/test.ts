@@ -426,6 +426,55 @@ describe('fastify-txstate', () => {
     })
   })
 
+  describe('protected resource metadata (RFC 9728)', () => {
+    it('should serve metadata listing the trusted oauth issuers as authorization_servers', async () => {
+      const resp = await client.get('/.well-known/oauth-protected-resource')
+      expect(resp.status).to.equal(200)
+      expect(resp.headers['content-type']).to.include('application/json')
+      expect(resp.data.resource).to.equal('http://fastify-http')
+      expect(resp.data.authorization_servers).to.deep.equal(['http://fakeauth'])
+      expect(resp.data.bearer_methods_supported).to.deep.equal(['header'])
+    })
+    it('should advertise registered cookie login/logout routes as cookie_login_uri and cookie_logout_uri', async () => {
+      const resp = await client.get('/.well-known/oauth-protected-resource')
+      expect(resp.data.cookie_login_uri).to.equal('http://fastify-http/.uaRedirect')
+      expect(resp.data.cookie_logout_uri).to.equal('http://fastify-http/.uaLogout')
+    })
+    it('should serve metadata without authorization_servers when cookie login routes exist but no oauth-type issuers are configured', async () => {
+      const resp = await httpsClient.get('/.well-known/oauth-protected-resource')
+      expect(resp.status).to.equal(200)
+      expect(resp.data.resource).to.equal('https://fastify-https')
+      expect(resp.data.authorization_servers).to.be.undefined
+      expect(resp.data.cookie_login_uri).to.equal('https://fastify-https/.uaRedirect')
+      expect(resp.data.cookie_logout_uri).to.equal('https://fastify-https/.uaLogout')
+    })
+    it('should serve the same metadata for the RFC path-suffix form used behind reverse proxies', async () => {
+      const resp = await client.get('/.well-known/oauth-protected-resource/api')
+      expect(resp.status).to.equal(200)
+      expect(resp.data.authorization_servers).to.deep.equal(['http://fakeauth'])
+    })
+    it('should point 401 responses at the metadata document via WWW-Authenticate', async () => {
+      try {
+        await client.post('/protected', { test: true })
+        expect.fail('should have thrown')
+      } catch (e: any) {
+        if (e.response == null) throw e
+        expect(e.response.status).to.equal(401)
+        expect(e.response.headers['www-authenticate']).to.equal('Bearer resource_metadata="http://fastify-http/.well-known/oauth-protected-resource"')
+      }
+    })
+    it('should point 401 responses at the metadata document when only cookie login routes are being advertised', async () => {
+      try {
+        await httpsClient.post('/protected', { test: true })
+        expect.fail('should have thrown')
+      } catch (e: any) {
+        if (e.response == null) throw e
+        expect(e.response.status).to.equal(401)
+        expect(e.response.headers['www-authenticate']).to.equal('Bearer resource_metadata="https://fastify-https/.well-known/oauth-protected-resource"')
+      }
+    })
+  })
+
   describe('file storage', () => {
     it('should upload a file and return its checksum and size', async () => {
       const fileContent = Buffer.from('hello world file storage test')

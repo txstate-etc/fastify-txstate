@@ -15,6 +15,7 @@ import type http2 from 'node:http2'
 import type { OpenAPIV3 } from 'openapi-types'
 import { clone, destroyNulls, isBlank, isNotBlank, omit, set, sleep, stringifyDates, toArray } from 'txstate-utils'
 import { HttpError, ValidationError, ValidationErrors, fstValidationToMessage } from './error.ts'
+import { getOAuthIssuerUrls, getProtectedResourceMetadataConfig, protectedResourceMetadataPath } from './jwt-auth.ts'
 
 // Routes contributed by registerOAuthCookieRoutes / registerUaCookieRoutes. The Server's
 // onRequest auth hook consults these at request time — except routes skip authentication
@@ -280,6 +281,7 @@ export default class Server {
   protected sigHandler: (signal: any) => void
   protected originChecker = new OriginChecker()
   protected swaggerEndpoint: string | undefined
+  protected servesResourceMetadata = false
   public app: FastifyInstanceTyped
   /**
    * The Ajv instance with `coerceTypes: false`, used for body validation by default (and
@@ -328,7 +330,7 @@ export default class Server {
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- ajvFormats cast is required by tsc even though eslint thinks otherwise
     config.ajv = { ...config.ajv, mode: undefined, plugins: [...(config.ajv?.plugins ?? []), ajvErrors as unknown as Plugin<unknown>, [ajvFormats as unknown as Plugin<unknown>, { mode: 'fast' }]], customOptions: { ...config.ajv?.customOptions, allErrors: true, strictSchema: false } }
     this.healthCallback = config.checkHealth
-    this.app = fastify(config)
+    this.app = fastify(config as FastifyServerOptions)
     this.app.addHook('onRoute', route => {
       if (!route.schema?.body) return
       const missingResponse = route.schema.response == null
@@ -425,7 +427,7 @@ export default class Server {
         DELETE: true
       }
       this.app.addHook('onRequest', async (req, res) => {
-        if (!authenticatedMethods[req.method] || isBlank(req.routeOptions.url) || req.routeOptions.url === '/health' || registeredExceptRoutes.has(req.routeOptions.url) || (this.swaggerEndpoint && req.routeOptions.url.startsWith(this.swaggerEndpoint))) return
+        if (!authenticatedMethods[req.method] || isBlank(req.routeOptions.url) || req.routeOptions.url === '/health' || req.routeOptions.url.startsWith(protectedResourceMetadataPath) || registeredExceptRoutes.has(req.routeOptions.url) || (this.swaggerEndpoint && req.routeOptions.url.startsWith(this.swaggerEndpoint))) return
         try {
           req.auth = await config.authenticate!(req)
         } catch (e: any) {
@@ -484,6 +486,15 @@ export default class Server {
         }
       }
     })
+    // RFC 9728 section 5.1: point 401 responses at the protected resource metadata
+    // document so clients can discover it by making an unauthenticated request and
+    // following the header. servesResourceMetadata is set during start() once we know
+    // the route actually exists — see registerProtectedResourceMetadataRoutes.
+    this.app.addHook('onSend', async (req, res) => {
+      if (res.statusCode === 401 && this.servesResourceMetadata && !res.hasHeader('WWW-Authenticate')) {
+        void res.header('WWW-Authenticate', `Bearer resource_metadata="${apiBaseUrl(req)}${protectedResourceMetadataPath}"`)
+      }
+    })
     this.app.get('/health', { logLevel: 'warn' }, async (req, res) => {
       if (this.shuttingDown) {
         res.log.warn('Returning 503 on /health because we are shutting down/restarting.')
@@ -539,9 +550,62 @@ export default class Server {
     }
   }
 
+  /**
+   * Register the protected resource metadata route (RFC 9728) if there is anything to
+   * advertise: trusted OAuth issuers, or cookie login routes for first-party browser
+   * clients. This runs at start() rather than in the constructor so that an app doing
+   * its own OAuth work can simply declare the route itself — if the path is already
+   * taken, or jwtAuthenticate was never set up, or there is nothing to point clients
+   * at, we register nothing and the path 404s like any other.
+   */
+  protected registerProtectedResourceMetadataRoutes () {
+    // metadataConfig stays undefined unless jwtAuthenticate ran, so an app with a
+    // custom authenticate function doesn't have its environment read (and a route
+    // registered) just because OAUTH_URLS happens to be set.
+    const metadataConfig = getProtectedResourceMetadataConfig()
+    if (metadataConfig == null || metadataConfig === false) return
+    const authorizationServers = getOAuthIssuerUrls()
+    // if cookie login routes are registered, advertise them in the document as
+    // cookie_login_uri (our own extension field — conformant OAuth clients ignore
+    // fields they don't know). This lets first-party SPAs discover the cookie login
+    // flow from the API with zero client-side configuration, and prefer it over
+    // performing the OAuth flow themselves via authorization_servers.
+    const cookieLoginPath = this.app.hasRoute({ method: 'GET', url: '/.oauthRedirect' })
+      ? '/.oauthRedirect'
+      : this.app.hasRoute({ method: 'GET', url: '/.uaRedirect' }) ? '/.uaRedirect' : undefined
+    const cookieLogoutPath = this.app.hasRoute({ method: 'GET', url: '/.oauthLogout' })
+      ? '/.oauthLogout'
+      : this.app.hasRoute({ method: 'GET', url: '/.uaLogout' }) ? '/.uaLogout' : undefined
+    // the config may supply authorization_servers itself (e.g. an app that verifies
+    // tokens with a jwks or publicKey issuer can still advertise where to log in);
+    // only bail when there is truly nothing to point clients at
+    if (!authorizationServers.length && metadataConfig.authorization_servers == null && !cookieLoginPath) return
+    const metadataHandler = async (req: FastifyRequest) => ({
+      resource: apiBaseUrl(req),
+      ...(authorizationServers.length ? { authorization_servers: authorizationServers } : {}),
+      bearer_methods_supported: ['header'],
+      ...(cookieLoginPath ? { cookie_login_uri: apiBaseUrl(req) + cookieLoginPath } : {}),
+      ...(cookieLogoutPath ? { cookie_logout_uri: apiBaseUrl(req) + cookieLogoutPath } : {}),
+      ...metadataConfig
+    })
+    if (!this.app.hasRoute({ method: 'GET', url: protectedResourceMetadataPath })) {
+      this.app.get(protectedResourceMetadataPath, metadataHandler)
+    }
+    // the wildcard variant accepts the RFC's path-suffix form
+    // (/.well-known/oauth-protected-resource/api) so that a reverse proxy hosting this
+    // API under a base path can forward the origin-level well-known URL to us unchanged
+    if (!this.app.hasRoute({ method: 'GET', url: protectedResourceMetadataPath + '/*' })) {
+      this.app.get(protectedResourceMetadataPath + '/*', metadataHandler)
+    }
+  }
+
   public async start (port?: number) {
     const customPort = port ?? parseInt(process.env.PORT ?? '0', 10)
+    this.registerProtectedResourceMetadataRoutes()
     await this.app.ready()
+    // now that all plugins have loaded, we know for certain whether the metadata route
+    // exists (ours or the app's own), so 401 responses can safely point at it
+    this.servesResourceMetadata = getProtectedResourceMetadataConfig() !== false && this.app.hasRoute({ method: 'GET', url: protectedResourceMetadataPath })
     if (this.swaggerEndpoint) this.app.swagger()
     if (customPort) {
       await this.app.listen({ port: customPort, host: '0.0.0.0' })

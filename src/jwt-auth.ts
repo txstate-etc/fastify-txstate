@@ -106,6 +106,13 @@ interface ResolvedIssuerConfig {
   clientIds?: Set<string>
 }
 
+/**
+ * The path where the Server answers OAuth 2.0 Protected Resource Metadata (RFC 9728)
+ * requests. Clients that have never seen the API hit this to learn which authorization
+ * servers it trusts, so they know where to send the user to log in.
+ */
+export const protectedResourceMetadataPath = '/.well-known/oauth-protected-resource'
+
 let hasInit = false
 const issuerConfigByIss = new Map<string, ResolvedIssuerConfig>()
 const verifyKeyByIss = new Map<string, KeyObject | JWTVerifyGetKey>()
@@ -526,6 +533,45 @@ export interface JwtAuthenticateOptions {
    *  If you use this, set per-issuer `audiences` to prevent tokens from other applications
    *  carrying unexpected authorization claims. */
   extraClaims?: (payload: JWTPayload) => Record<string, unknown>
+  /**
+   * Extra fields to merge into the protected resource metadata document served at
+   * `/.well-known/oauth-protected-resource` (see RFC 9728). The Server registers that
+   * route at start(), only when this factory has been called and there is something to
+   * advertise: at least one trusted oauth-type issuer was found, cookie login routes
+   * are registered (advertised as `cookie_login_uri` / `cookie_logout_uri`), or you supplied
+   * `authorization_servers` here yourself (useful when you verify tokens with a jwks
+   * or publicKey issuer but clients still need to know where to log in). We fill in `resource`,
+   * `authorization_servers`, and `bearer_methods_supported` automatically from the
+   * trust configuration; use this for the fields we can't infer, like
+   * `scopes_supported` (which scopes a client should request when asking the
+   * authorization server for a token) or `resource_name` (a human-readable API name
+   * for consent screens). Use the RFC's snake_case field names. Fields given here win
+   * over the automatic ones, so you can also override `resource` if your API's
+   * public identifier isn't what we derive from PUBLIC_URL or the request.
+   *
+   * If you want to serve your own metadata document instead, just declare the route —
+   * the Server only registers its route at start() when the path is still free.
+   * Declaring it inside an encapsulated plugin hides it from the Server until it's too
+   * late, though, so in that case pass `false` here to keep the built-in route out of
+   * the way entirely (this also suppresses the WWW-Authenticate pointer on 401s, since
+   * we can no longer vouch for the route).
+   */
+  protectedResourceMetadata?: Record<string, unknown> | false
+}
+
+let metadataConfig: Record<string, unknown> | false | undefined
+
+/**
+ * The Server's protected resource metadata route is gated on this being non-null: it
+ * stays undefined until jwtAuthenticate runs, which is how the Server knows jwt-auth is
+ * deliberately in use and not just that OAuth env vars happen to be set. Holds the
+ * `protectedResourceMetadata` option from the most recent jwtAuthenticate call, `{}`
+ * when no option was given. Apps that authenticate some other way and still want a
+ * metadata document don't need any of this — they can declare the route themselves and
+ * the Server will step aside.
+ */
+export function getProtectedResourceMetadataConfig (): Record<string, unknown> | false | undefined {
+  return metadataConfig
 }
 
 /**
@@ -554,8 +600,17 @@ export interface JwtAuthenticateOptions {
  * token for a new access token and queues the replacement cookies on
  * `req.pendingOAuthCookies`. The onSend hook installed by registerOAuthCookieRoutes
  * flushes those cookies onto the response.
+ *
+ * Calling this factory reads the trust configuration from the environment immediately,
+ * so a malformed JWT_TRUSTED_ISSUERS fails at startup instead of on the first login.
+ * If any trusted OAuth issuers or cookie login routes are found, the Server will serve
+ * a protected resource metadata route (RFC 9728) at
+ * `/.well-known/oauth-protected-resource` advertising them to clients that need to
+ * discover where to log in.
  */
 export function jwtAuthenticate (options?: JwtAuthenticateOptions): (req: FastifyRequest) => Promise<FastifyTxStateAuthInfo | undefined> {
+  init()
+  metadataConfig = options?.protectedResourceMetadata ?? metadataConfig ?? {}
   const exceptRoutes = new Set(options?.exceptRoutes)
   const optionalRoutes = new Set(options?.optionalRoutes)
   return async (req: FastifyRequest) => {

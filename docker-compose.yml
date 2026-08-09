@@ -17,7 +17,7 @@ services:
     attach: false
     environment:
       NODE_ENV: development
-      JWT_TRUSTED_ISSUERS: '[{ "iss": "unified-auth", "url": "http://fakeauth/jwks" }]'
+      JWT_TRUSTED_ISSUERS: '[{ "iss": "unified-auth", "url": "http://fakeauth/jwks" }, { "iss": "http://fakeauth", "type": "oauth", "url": "http://fakeauth" }]'
       JWT_TRUSTED_CLIENTIDS: fastify-test
       UA_URL: 'http://fakeauth'
       UA_COOKIE_CLIENTID: fastify-test
