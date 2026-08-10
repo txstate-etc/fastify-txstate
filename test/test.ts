@@ -314,6 +314,30 @@ describe('fastify-txstate', () => {
         expect(e.response.status).to.equal(500)
       }
     })
+    it('should accept a route with a body schema and no response schema without crashing at boot', async () => {
+      const resp = await client.post('/bodyonly', { str: 'hello' })
+      expect(resp.data.str).to.equal('hello')
+    })
+    it('should still reject invalid payloads on a route with a body schema and no response schema', async () => {
+      try {
+        await client.post('/bodyonly', { num: 4.3 })
+        expect.fail('should have thrown')
+      } catch (e: any) {
+        if (e.response == null) throw e
+        expect(e.response.status).to.equal(422)
+      }
+    })
+    it('should not overwrite an explicitly declared response.400 schema', async () => {
+      try {
+        await client.post('/custom400', { grant_type: 'authorization_code' })
+        expect.fail('should have thrown')
+      } catch (e: any) {
+        if (e.response == null) throw e
+        expect(e.response.status).to.equal(400)
+        expect(e.response.data.error).to.equal('invalid_grant')
+        expect(e.response.data.error_description).to.equal('The provided grant is invalid.')
+      }
+    })
     it('should accept a date-time formatted string', async () => {
       const resp = await client.post('/datetime', { mydate: '2023-10-01T12:00:00Z' })
       expect(new Date(resp.data.yourdate).getTime()).to.equal(new Date('2023-10-01T12:00:00Z').getTime())

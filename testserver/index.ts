@@ -75,6 +75,15 @@ server.swagger().then(async () => {
   server.app.post<{ Body: TypedInputRecursive }>('/typed', { schema: { body: typedInputRecursive, response: { 200: { type: 'string' } } } }, (req, res) => req.body.str)
   server.app.post<{ Body: TypedInputRecursive }>('/numtyped', { schema: { body: typedInputRecursive, response: { 200: { type: 'object', properties: { num: { type: 'number' } } } } } }, (req, res) => ({ num: req.body.num }))
   server.app.post<{ Body: TypedInputRecursive }>('/badtyped', { schema: { body: typedInputRecursive, response: { 200: { type: 'integer' } } } }, (req, res) => 5.5)
+  // regression: routes with a body schema and no response schema used to crash the server at boot
+  server.app.post<{ Body: TypedInput }>('/bodyonly', { schema: { body: typedInput } }, (req, res) => ({ str: req.body.str }))
+  // regression: an explicitly declared response.400 used to be overwritten with the ValidatedResponse schema
+  server.app.post<{ Body: { grant_type: string } }>('/custom400', {
+    schema: {
+      body: { type: 'object', properties: { grant_type: { type: 'string' } }, required: ['grant_type'] },
+      response: { 400: { type: 'object', properties: { error: { type: 'string' }, error_description: { type: 'string' } } } }
+    }
+  }, async (req, res) => await res.status(400).send({ error: 'invalid_grant', error_description: 'The provided grant is invalid.' }))
   server.app.post<{ Body: { mydate: string } }>('/datetime', { schema: { body: { type: 'object', properties: { mydate: { type: 'string', format: 'date-time' } }, required: ['mydate'], additionalProperties: false }, response: { 200: { type: 'object', properties: { yourdate: { type: 'string', format: 'date-time' } } } } } }, (req, res) => {
     const date = new Date(req.body.mydate)
     return { yourdate: date.toISOString() }

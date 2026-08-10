@@ -333,18 +333,22 @@ export default class Server {
     this.app = fastify(config as FastifyServerOptions)
     this.app.addHook('onRoute', route => {
       if (!route.schema?.body) return
-      const missingResponse = route.schema.response == null
-      const response400 = set(validatedResponse.properties.messages, 'description', 'Basic validation failure. This means that the UI provided input that failed validation as defined in the openapi specification published by the API. The UI is at fault and should be re-coded to avoid sending invalid data.')
-      let newSchema = set<Record<string, any>>(route.schema ?? {}, 'response.400', response400)
-      const response422 = set(validatedResponse, 'description', 'Validation failure. This means that the user provided an invalid object. The user should be shown their error so that they can correct it.')
-      newSchema = set(newSchema, 'response.422', response422)
-      if (missingResponse) {
-        newSchema.response['200'] = { // eslint-disable-line @typescript-eslint/no-unsafe-member-access -- response is typed as any from set()
+      const existingResponse = (route.schema.response ?? {
+        200: {
           description: 'Success. Return type has not been specified.',
           type: 'object'
         }
+      }) as Record<string, unknown>
+      const response400 = set(validatedResponse.properties.messages, 'description', 'Basic validation failure. This means that the UI provided input that failed validation as defined in the openapi specification published by the API. The UI is at fault and should be re-coded to avoid sending invalid data.')
+      const response422 = set(validatedResponse, 'description', 'Validation failure. This means that the user provided an invalid object. The user should be shown their error so that they can correct it.')
+      route.schema = {
+        ...route.schema,
+        response: {
+          ...existingResponse,
+          400: existingResponse[400] ?? response400,
+          422: existingResponse[422] ?? response422
+        }
       }
-      route.schema = newSchema
     })
 
     this.app.addHook('preValidation', (req, res, done) => {
