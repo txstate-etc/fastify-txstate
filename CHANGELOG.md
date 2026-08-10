@@ -1,5 +1,11 @@
 # Changelog
 
+## 4.2.0
+
+### New Features
+
+- OAuth issuers that advertise a token introspection endpoint ([RFC 7662](https://www.rfc-editor.org/rfc/rfc7662)) in their discovery document now get the same treatment unified-auth gets from its `/validateToken` poll: once a session token is more than 5 minutes old, we periodically ask the provider whether it is still active, so revoked tokens and deactivated users stop working within minutes instead of at token expiration. RFC 7662 requires providers to authorize introspection callers, so set the new `OAUTH_INTROSPECT_TOKEN` env var to a service token the provider will accept as a Bearer credential. If the provider rejects our credentials, the check is disabled for that endpoint until restart and we behave as though no introspection endpoint was advertised.
+
 ## 4.1.0
 
 ### New Features

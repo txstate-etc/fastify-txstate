@@ -206,7 +206,7 @@ We provide a built-in `jwtAuthenticate` that validates JWT tokens from any combi
 # JWT Authentication
 The `jwtAuthenticate` function validates JWTs from the `Authorization: Bearer` header or a session cookie. It supports any mix of these issuer types:
 
-- **OAuth/OIDC** — auto-discovers the provider's JWKS via `.well-known/openid-configuration` or `.well-known/oauth-authorization-server` from the issuer's `iss` claim.
+- **OAuth/OIDC** — auto-discovers the provider's JWKS via `.well-known/openid-configuration` or `.well-known/oauth-authorization-server` from the issuer's `iss` claim. If the provider advertises a token introspection endpoint ([RFC 7662](https://www.rfc-editor.org/rfc/rfc7662)), tokens more than 5 minutes old are also polled for revocation, so ended sessions and deactivated users stop working within minutes instead of at token expiration. See `OAUTH_INTROSPECT_TOKEN` below.
 - **TxState Unified Auth** — JWKS + a `/validateToken` poll for centralized deauth.
 - **JWKS endpoint** — a direct JWKS URL (no discovery).
 - **Asymmetric public key** — a PEM-encoded RSA/EC public key.
@@ -228,6 +228,7 @@ At least one issuer must be configured. Use any combination of the env-var short
 | `UA_URL_INTERNAL` | Internal URL of the UA service for server-to-server requests in split-horizon DNS scenarios. |
 | `OAUTH_URLS` | Comma-separated OAuth/OIDC issuer URLs (e.g. `https://accounts.google.com,https://login.microsoftonline.com/{tenant}/v2.0`). Each becomes an issuer with `iss` equal to the URL. |
 | `OAUTH_INTERNAL_URLS` | Map external OAuth issuer URLs to internal URLs for docker-compose / split-horizon DNS. Format: `external=internal,external=internal` (e.g. `https://auth.example.com=http://keycloak:8080`). Rewrites server-to-server requests (discovery, JWKS, token exchange) but not browser redirects. |
+| `OAUTH_INTROSPECT_TOKEN` | Service token sent as a Bearer credential when polling an OAuth provider's token introspection endpoint. RFC 7662 requires providers to authorize introspection callers, so most will reject the poll without this. When a provider rejects our credentials, the revocation check is disabled for that endpoint (until restart) and we behave as though no introspection endpoint was advertised. |
 | `JWT_SECRET` | Symmetric HMAC secret for verifying JWTs. Tokens must have `iss: 'jwt-secret'`. |
 | `JWT_PUBLIC_KEY` | PEM-encoded asymmetric public key for verifying JWTs. Tokens must have `iss: 'jwt-public-key'` (use `JWT_TRUSTED_ISSUERS` instead for another name). Literal `\n` is converted to real newlines so PEMs survive env-var encoding. |
 | `JWT_TRUSTED_AUDIENCES` | Comma-separated list of accepted `aud` values, unioned into every issuer's audience list. See [Audience Validation](#audience-validation). |

@@ -10,6 +10,7 @@ export interface OAuthDiscovery {
   authorization_endpoint?: string
   token_endpoint?: string
   end_session_endpoint?: string
+  introspection_endpoint?: string
 }
 
 interface TokenResponse {
@@ -372,7 +373,10 @@ const tokenCache = new Cache(async (token: string, req: FastifyRequest): Promise
   }
 }, { freshseconds: 3600 })
 
-const validateCache = new Cache(async (token: string, payload: JWTPayload) => {
+// These caches return their verdict and let the caller throw — thrown fetcher results
+// are never cached, so revoked tokens would hit the provider on every request.
+// undefined means the check didn't apply.
+const validateCache = new Cache(async (token: string, payload: JWTPayload): Promise<{ valid: boolean, reason?: string } | undefined> => {
   const config = payload.iss ? issuerConfigByIss.get(payload.iss) : undefined
   if (!config?.validateUrl) return
   // avoid checking for deauth until the token is more than 5 minutes old
@@ -380,8 +384,45 @@ const validateCache = new Cache(async (token: string, payload: JWTPayload) => {
   const validateUrl = new URL(config.validateUrl)
   validateUrl.searchParams.set('unifiedJwt', token)
   const resp = await fetch(validateUrl)
-  const validate = await resp.json() as { valid: boolean, reason?: string }
-  if (!validate.valid) throw new Error(validate.reason ?? 'Your session has been ended on another device or in another browser tab/window. It\'s also possible your NetID is no longer active.')
+  // an error body would parse fine and read as a pass, so fail closed
+  if (!resp.ok) throw new Error(`Token validation at ${validateUrl.origin}${validateUrl.pathname} failed with status ${resp.status}.`)
+  return await resp.json() as { valid: boolean, reason?: string }
+})
+
+// endpoints that rejected our credentials — treated as if the provider never advertised one
+const disabledIntrospectionEndpoints = new Set<string>()
+
+/**
+ * The oauth counterpart to validateCache: when the provider advertises a token
+ * introspection endpoint (RFC 7662), poll it so revocation and user deactivation take
+ * effect before the token expires. Introspection requires authorization, so set
+ * OAUTH_INTROSPECT_TOKEN to a service token the provider accepts as a Bearer credential.
+ */
+const introspectCache = new Cache(async (token: string, ctx: { payload: JWTPayload, req: FastifyRequest }): Promise<{ active: boolean } | undefined> => {
+  const { payload, req } = ctx
+  const config = payload.iss ? issuerConfigByIss.get(payload.iss) : undefined
+  if (config?.type !== 'oauth' || !config.url) return
+  // avoid checking for revocation until the token is more than 5 minutes old
+  if (new Date(payload.iat! * 1000) > new Date(Date.now() - 1000 * 60 * 5)) return
+  const endpoint = (await discoveryCache.get(config.url))?.introspection_endpoint
+  if (!isNotBlank(endpoint) || disabledIntrospectionEndpoints.has(endpoint)) return
+  const headers: Record<string, string> = { 'Content-Type': 'application/x-www-form-urlencoded' }
+  const hasServiceToken = isNotBlank(process.env.OAUTH_INTROSPECT_TOKEN)
+  if (hasServiceToken) headers.Authorization = `Bearer ${process.env.OAUTH_INTROSPECT_TOKEN}`
+  const resp = await fetch(toInternalUrl(endpoint), {
+    method: 'POST',
+    headers,
+    body: new URLSearchParams({ token })
+  })
+  if (resp.status === 401 || resp.status === 403) {
+    disabledIntrospectionEndpoints.add(endpoint)
+    if (hasServiceToken) req.log.error(`${endpoint} rejected OAUTH_INTROSPECT_TOKEN. Token revocation checks against it are disabled until restart.`)
+    else req.log.info(`${endpoint} requires credentials for token introspection and OAUTH_INTROSPECT_TOKEN is not set. Token revocation checks against it are disabled until restart.`)
+    return
+  }
+  // fail closed on provider errors; stale cached verdicts absorb brief outages
+  if (!resp.ok) throw new Error(`Token introspection at ${endpoint} failed with status ${resp.status}.`)
+  return await resp.json() as { active: boolean }
 })
 
 interface RefreshResult {
@@ -515,7 +556,10 @@ async function jwtAuthenticateInternal (req: FastifyRequest, extraClaims?: (payl
 
   if (!result) return undefined
 
-  await validateCache.get(result.token, result.payload)
+  const validation = await validateCache.get(result.token, result.payload)
+  if (validation?.valid === false) throw new Error(validation.reason ?? 'Your session has been ended on another device or in another browser tab/window. It\'s also possible your NetID is no longer active.')
+  const introspection = await introspectCache.get(result.token, { payload: result.payload, req })
+  if (introspection?.active === false) throw new Error('Your session has been ended on another device or in another browser tab/window. It\'s also possible your account is no longer active.')
 
   const authInfo = buildAuthInfo(result, extraClaims)
   authInfo.accessToken = accessTokenFromReq(req)
@@ -579,7 +623,9 @@ export function getProtectedResourceMetadataConfig (): Record<string, unknown> |
  * header or a session cookie. Supports any mix of issuer types via the
  * JWT_TRUSTED_ISSUERS env var:
  *
- *   - 'oauth'         — OAuth/OIDC provider with .well-known auto-discovery
+ *   - 'oauth'         — OAuth/OIDC provider with .well-known auto-discovery. If the
+ *                       provider advertises a token introspection endpoint, tokens are
+ *                       also polled for revocation — see OAUTH_INTROSPECT_TOKEN.
  *   - 'jwks'          — JWKS endpoint URL (no discovery)
  *   - 'unified-auth'  — TxState Unified Auth (JWKS + /validateToken poll for deauth)
  *   - 'publicKey'     — PEM-encoded asymmetric public key
