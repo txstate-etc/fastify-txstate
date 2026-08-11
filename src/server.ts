@@ -444,15 +444,23 @@ export default class Server {
         }
       })
     }
+    // our onSend hooks are callback-style on purpose. An async onSend hook adds a
+    // microtask to fastify's send pipeline, and reply.sent stays false until the
+    // response has fully ended, so an async handler that calls res.send() and resolves
+    // undefined can win the race against its own send and trigger a second one —
+    // harmless log spam for buffered payloads, but it ends the raw response underneath
+    // a streamed payload and destroys the socket mid-stream.
     this.app.addHook('onSend', this.https && process.env.NODE_ENV !== 'development'
-      ? async (_, resp) => {
+      ? (_, resp, payload, done) => {
         void resp.removeHeader('X-Powered-By')
         void resp.header('Strict-Transport-Security', 'max-age=31536000')
         if (resp.getHeader('content-type') === 'text/html') void resp.type('text/html; charset=utf-8')
+        done(null, payload)
       }
-      : async (_, resp) => {
+      : (_, resp, payload, done) => {
         void resp.removeHeader('X-Powered-By')
         if (resp.getHeader('content-type') === 'text/html') void resp.type('text/html; charset=utf-8')
+        done(null, payload)
       })
     this.app.setNotFoundHandler((req, res) => { void res.status(404).send('Not Found.') })
     this.app.setErrorHandler(async (err: FastifyError, req, res) => {
@@ -494,10 +502,12 @@ export default class Server {
     // document so clients can discover it by making an unauthenticated request and
     // following the header. servesResourceMetadata is set during start() once we know
     // the route actually exists — see registerProtectedResourceMetadataRoutes.
-    this.app.addHook('onSend', async (req, res) => {
+    // callback-style for the same double-send reason as the hook above
+    this.app.addHook('onSend', (req, res, payload, done) => {
       if (res.statusCode === 401 && this.servesResourceMetadata && !res.hasHeader('WWW-Authenticate')) {
         void res.header('WWW-Authenticate', `Bearer resource_metadata="${apiBaseUrl(req)}${protectedResourceMetadataPath}"`)
       }
+      done(null, payload)
     })
     this.app.get('/health', { logLevel: 'warn' }, async (req, res) => {
       if (this.shuttingDown) {

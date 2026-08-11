@@ -55,6 +55,10 @@ describe('fastify-txstate', () => {
       const resp = await client.get('/test')
       expect(resp.data.hello).to.equal('world')
     })
+    it('should deliver a whole streamed reply from an async handler that does not return the reply', async () => {
+      const resp = await client.get('/streamlate')
+      expect(resp.data).to.equal('row 0\nrow 1\nrow 2\nrow 3\nrow 4\n')
+    })
     it('should return a 403 by throwing an error', async () => {
       await expectErrorCode(client, '/403', 403)
     })

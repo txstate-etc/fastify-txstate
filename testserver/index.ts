@@ -1,5 +1,6 @@
 import fastifyMultipart from '@fastify/multipart'
 import type { FromSchema } from 'json-schema-to-ts'
+import { PassThrough } from 'node:stream'
 import { isBlank } from 'txstate-utils'
 import Server, { HttpError, analyticsPlugin, fileHandler, formDataFieldsFromParts, formDataFilesFromParts, jwtAuthenticate, postFormData, registerUaCookieRoutes, requireCookieAuthUa } from '../src/index.ts'
 
@@ -65,6 +66,15 @@ server.swagger().then(async () => {
     await res.send('OK')
     await server.close(0.5)
     process.exit()
+  })
+  // regression: an async handler that calls res.send(stream) without returning the reply
+  // used to double-send whenever our onSend hooks were async, because the handler resolved
+  // before the first send flushed headers — fastify then ended the raw response mid-stream
+  server.app.get('/streamlate', async (req, res) => {
+    const stream = new PassThrough()
+    void res.header('Content-Type', 'text/plain; charset=utf-8').send(stream)
+    for (let i = 0; i < 5; i++) stream.write(`row ${i}\n`)
+    stream.end()
   })
   server.app.get('/proxy', async (req, res) => ({ protocol: req.protocol, host: req.host, hostname: req.hostname }))
   server.app.get('/logging', async (req, res) => {

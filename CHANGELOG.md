@@ -1,5 +1,11 @@
 # Changelog
 
+## 4.2.1
+
+### Fixes
+
+- Our `onSend` hooks are now registered callback-style instead of as async functions. An async `onSend` hook adds a microtask to fastify's send pipeline, and fastify decides whether an async route handler needs an automatic send by checking `reply.sent` when the handler's promise resolves — but `reply.sent` only becomes true once the response has fully ended, so a handler that calls `res.send()` and resolves undefined could win the race against its own send and trigger a second one. For buffered payloads the second send was swallowed, with a `Reply was already sent` warning logged on every request; for streamed payloads it ended the raw response while the stream was still piping, destroying the socket so clients saw `TypeError: fetch failed`. The `WWW-Authenticate` hook added in 4.1.0 widened the window enough to hit every async handler that uses the `res.send()`-without-return pattern. Note that the underlying race is fastify's and still exists: if your app registers its own async `onSend` hook, protect any handler that sends a stream by ending it with `return res`.
+
 ## 4.2.0
 
 ### New Features
