@@ -499,7 +499,7 @@ The client sends events shaped like:
 |--------|-------------|
 | `appName` | **Required.** Identifies the application in stored events. |
 | `analyticsClient` | An `AnalyticsClient` instance for storing events. See below for defaults. |
-| `authorize` | A function `(req) => boolean` to restrict access to the endpoint. If it returns false, a 401 is thrown. |
+| `authorize` | Restricts access to the endpoint. Pass `true` to require any authenticated user, or a function `(req) => boolean` for custom logic. A failed check throws a 401. |
 
 ## Storage Clients
 By default, the plugin picks a client automatically:

@@ -42,7 +42,7 @@ The server enriches each event with: `@timestamp`, `appName`, `environment`, par
 |--------|-------------|
 | `appName` | **Required.** Identifies the application in stored events |
 | `analyticsClient` | An `AnalyticsClient` instance. See below for defaults |
-| `authorize` | `(req) => boolean` to restrict access. Returns 401 if false |
+| `authorize` | `true` to require any authenticated user, or `(req) => boolean` for custom logic. Returns 401 on failure |
 
 ## Storage Clients
 
