@@ -510,7 +510,7 @@ describe('fastify-txstate', () => {
       formData.append('file', new Blob([fileContent], { type: 'text/plain' }), 'test.txt')
       const resp = await client.post('/filestorage/upload', formData)
       expect(resp.data).to.be.an('array').with.lengthOf(1)
-      expect(resp.data[0].checksum).to.be.a('string')
+      expect(resp.data[0].checksum).to.match(/^[\w\-]{43}$/v)
       expect(resp.data[0].size).to.equal(fileContent.length)
       expect(resp.data[0].filename).to.equal('test.txt')
     })
@@ -522,6 +522,70 @@ describe('fastify-txstate', () => {
       const checksum = uploadResp.data[0].checksum
       const downloadResp = await client.get(`/filestorage/download/${checksum}`, { responseType: 'arraybuffer' })
       expect(Buffer.from(downloadResp.data).toString()).to.equal('download test content')
+    })
+    it('should download a file by the hex form of its checksum', async () => {
+      const formData = new FormData()
+      formData.append('file', new Blob([Buffer.from('hex lookup content')], { type: 'text/plain' }), 'hex.txt')
+      const uploadResp = await client.post('/filestorage/upload', formData)
+      const hex = Buffer.from(uploadResp.data[0].checksum, 'base64url').toString('hex')
+      const downloadResp = await client.get(`/filestorage/download/${hex}`, { responseType: 'arraybuffer' })
+      expect(Buffer.from(downloadResp.data).toString()).to.equal('hex lookup content')
+    })
+    it('should migrate a file stored under its base64url checksum to its hex location', async () => {
+      const { data: { checksum } } = await client.post('/filestorage/legacyupload', { content: 'legacy file content' })
+      expect((await client.post(`/filestorage/migrate/${checksum}`, {})).data.migrated).to.equal(true)
+      const downloadResp = await client.get(`/filestorage/download/${checksum}`, { responseType: 'arraybuffer' })
+      expect(Buffer.from(downloadResp.data).toString()).to.equal('legacy file content')
+      expect((await client.post(`/filestorage/migrate/${checksum}`, {})).data.migrated).to.equal(false)
+    })
+    it('should serve and remove a legacy file that has not been migrated', async () => {
+      const { data: { checksum } } = await client.post('/filestorage/legacyupload', { content: 'unmigrated download content' })
+      const downloadResp = await client.get(`/filestorage/download/${checksum}`, { responseType: 'arraybuffer' })
+      expect(Buffer.from(downloadResp.data).toString()).to.equal('unmigrated download content')
+      await client.post(`/filestorage/remove/${checksum}`, {})
+      try {
+        await client.get(`/filestorage/download/${checksum}`)
+        expect.fail('should have thrown')
+      } catch (e: any) {
+        expect(e.response.status).to.equal(404)
+      }
+      expect((await client.post(`/filestorage/migrate/${checksum}`, {})).data.migrated).to.equal(false)
+    })
+    it('should survive two bulk migrations running at once', async () => {
+      const legacy: string[] = []
+      for (let i = 0; i < 20; i++) legacy.push((await client.post('/filestorage/legacyupload', { content: `concurrent legacy ${i}` })).data.checksum)
+      const results = await Promise.all([client.post('/filestorage/migrateall', {}), client.post('/filestorage/migrateall', {})])
+      expect(results[0].data.migrated + results[1].data.migrated).to.be.at.least(20)
+      const { data: checksums } = await client.get('/filestorage/checksums')
+      expect(checksums).to.include.members(legacy)
+      expect((await client.post('/filestorage/migrateall', {})).data.migrated).to.equal(0)
+    })
+    it('should list the checksums of stored files, including legacy files', async () => {
+      const formData = new FormData()
+      formData.append('file', new Blob([Buffer.from('checksum listing content')], { type: 'text/plain' }), 'list.txt')
+      const { data: [{ checksum }] } = await client.post('/filestorage/upload', formData)
+      const { data: { checksum: legacy } } = await client.post('/filestorage/legacyupload', { content: 'unmigrated legacy content' })
+      const { data: checksums } = await client.get('/filestorage/checksums')
+      expect(checksums).to.include.members([checksum, legacy])
+    })
+    it('should migrate all legacy files at once', async () => {
+      const { data: { checksum: legacy1 } } = await client.post('/filestorage/legacyupload', { content: 'bulk legacy one' })
+      const { data: { checksum: legacy2 } } = await client.post('/filestorage/legacyupload', { content: 'bulk legacy two' })
+      expect((await client.post('/filestorage/migrateall', {})).data.migrated).to.be.at.least(2)
+      const { data: checksums } = await client.get('/filestorage/checksums')
+      expect(checksums).to.include.members([legacy1, legacy2])
+      const downloadResp = await client.get(`/filestorage/download/${legacy2}`, { responseType: 'arraybuffer' })
+      expect(Buffer.from(downloadResp.data).toString()).to.equal('bulk legacy two')
+      expect((await client.post('/filestorage/migrateall', {})).data.migrated).to.equal(0)
+    })
+    it('should trust legacy names without rehashing on a case-sensitive filesystem', async () => {
+      await client.post('/filestorage/legacyupload', { content: 'q', checksum: 'q'.repeat(43) })
+      await client.post('/filestorage/legacyupload', { content: 'Q', checksum: 'Q'.repeat(43) })
+      const { data: checksums } = await client.get('/filestorage/checksums')
+      // contents don't match the names, so these would be skipped if they had been rehashed
+      expect(checksums).to.include.members(['q'.repeat(43), 'Q'.repeat(43)])
+      await client.post(`/filestorage/remove/${'q'.repeat(43)}`, {})
+      await client.post(`/filestorage/remove/${'Q'.repeat(43)}`, {})
     })
     it('should return 404 for a non-existent checksum', async () => {
       try {

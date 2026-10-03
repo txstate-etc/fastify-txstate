@@ -1,5 +1,14 @@
 # Changelog
 
+## 4.3.0
+
+### New Features
+
+- `FileSystemHandler` now names files on disk by the hex form of their SHA-256 checksum instead of base64url. Base64url mixes upper and lower case, and a case-insensitive filesystem like Azure Files over SMB can't tell `a/` from `A/`. `put()` still returns the shorter base64url checksum for your database, and every method accepts either form.
+- Files stored by older versions keep working without any action on your part: `get`, `exists`, `fileSize`, and `remove` fall back to the old base64url location when a file isn't at its hex location yet.
+- New `migrateLegacyFiles()` moves every file still stored under its base64url name to its hex location and returns how many it moved. It's safe to re-run, safe to interrupt, and safe to run on more than one server at once. If you'd rather drive it from your database, `migrateLegacyFile(checksum)` does the same for one file.
+- New `checksums()` is an async iterator over the base64url checksum of every stored file, migrated or not. On a case-insensitive filesystem the folder names don't reliably record the case of the checksum, so each unmigrated file has to be read and hashed to recover its true checksum, and any file whose contents don't match its name is skipped. Once it sees both an `x/` and an `X/` folder, it knows the filesystem is case-sensitive and trusts the names instead. That hashing is a one-time cost that goes away once everything is migrated.
+
 ## 4.2.1
 
 ### Fixes

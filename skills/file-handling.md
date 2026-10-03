@@ -38,7 +38,7 @@ The third argument is an optional headers object.
 
 ## File Storage with FileSystemHandler
 
-`FileSystemHandler` streams uploaded files to the local filesystem, named by their SHA-256 checksum. Identical files are automatically deduplicated. Files are stored in a two-level directory structure based on the checksum (`a/b/cdef...`) to avoid overwhelming a single directory.
+`FileSystemHandler` streams uploaded files to the local filesystem, named by their hex-encoded SHA-256 checksum. `put` returns the shorter base64url form for storing in your database; every method accepts either form. Identical files are automatically deduplicated. Files are stored in a two-level directory structure based on the checksum (`a/b/cdef...`) to avoid overwhelming a single directory.
 
 ```javascript
 import Server, { FileSystemHandler } from 'fastify-txstate'
@@ -70,6 +70,9 @@ server.app.get('/download/:checksum', async (req, res) => {
 | `remove(checksum)` | Deletes the file. No-op if already gone. |
 | `exists(checksum)` | Returns `true` if the file exists. |
 | `fileSize(checksum)` | Returns the file size in bytes. |
+| `migrateLegacyFiles()` | Runs `migrateLegacyFile` on every legacy file in storage. Returns the number of files moved. |
+| `checksums()` | Async iterator over the base64url checksum of every stored file, including legacy files that haven't been migrated. On a case-insensitive filesystem (e.g. Azure Files over SMB) the case of folder names can be lost, so legacy files are hashed to recover their checksum and skipped if their contents don't match their name. Hashing is skipped once the presence of both an `x/` and an `X/` folder proves the filesystem is case-sensitive. |
+| `migrateLegacyFile(checksum)` | Moves a file stored by an older version under its base64url name to its hex location. Returns `false` if there was no legacy file. |
 
 Defaults: `tmpdir` = `/files/tmp/`, `permdir` = `/files/storage/`. A default instance is exported as `fileHandler`.
 

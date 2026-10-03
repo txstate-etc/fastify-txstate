@@ -449,7 +449,7 @@ server.app.get('/download/:checksum', async (req, res) => {
 })
 ```
 
-The `put` method streams the file to a temporary location while computing its SHA-256 hash, then re-reads the file to verify it was written correctly before moving it to its permanent checksum-based path. It returns the `checksum` (base64url-encoded) and `size` in bytes.
+The `put` method streams the file to a temporary location while computing its SHA-256 hash, then re-reads the file to verify it was written correctly before moving it to its permanent checksum-based path. It returns the `checksum` (base64url-encoded, to keep database columns short) and `size` in bytes. Files are named on disk by the hex form of the checksum, and every method accepts either form.
 
 | Method | Description |
 |--------|-------------|
@@ -459,6 +459,9 @@ The `put` method streams the file to a temporary location while computing its SH
 | `remove(checksum)` | Deletes the file. No-op if already gone. |
 | `exists(checksum)` | Returns `true` if the file exists. |
 | `fileSize(checksum)` | Returns the file size in bytes. |
+| `migrateLegacyFiles()` | Runs `migrateLegacyFile` on every legacy file in storage. Returns the number of files moved. |
+| `checksums()` | Async iterator over the base64url checksum of every stored file, including legacy files that haven't been migrated. On a case-insensitive filesystem (e.g. Azure Files over SMB) the case of folder names can be lost, so legacy files are hashed to recover their checksum and skipped if their contents don't match their name. Hashing is skipped once the presence of both an `x/` and an `X/` folder proves the filesystem is case-sensitive. |
+| `migrateLegacyFile(checksum)` | Moves a file stored by an older version under its base64url name to its hex location. Returns `false` if there was no legacy file. |
 
 Both `tmpdir` and `permdir` default to `/files/tmp/` and `/files/storage/` respectively. A default instance is also exported as `fileHandler` if the defaults work for your setup.
 

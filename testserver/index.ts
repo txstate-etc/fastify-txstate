@@ -1,5 +1,8 @@
 import fastifyMultipart from '@fastify/multipart'
 import type { FromSchema } from 'json-schema-to-ts'
+import { createHash } from 'node:crypto'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { dirname } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { isBlank } from 'txstate-utils'
 import Server, { HttpError, analyticsPlugin, fileHandler, formDataFieldsFromParts, formDataFilesFromParts, jwtAuthenticate, postFormData, registerUaCookieRoutes, requireCookieAuthUa } from '../src/index.ts'
@@ -147,6 +150,21 @@ server.swagger().then(async () => {
       }
     }
     return results
+  })
+  server.app.post<{ Body: { content: string, checksum?: string } }>('/filestorage/legacyupload', async (req, res) => {
+    const checksum = req.body.checksum ?? createHash('sha256').update(req.body.content).digest('base64url')
+    const legacypath = `/files/storage/${checksum.slice(0, 1)}/${checksum.slice(1, 2)}/${checksum.slice(2)}`
+    await mkdir(dirname(legacypath), { recursive: true })
+    await writeFile(legacypath, req.body.content)
+    return { checksum }
+  })
+  server.app.post<{ Params: { checksum: string } }>('/filestorage/migrate/:checksum', async (req, res) => ({ migrated: await fileHandler.migrateLegacyFile(req.params.checksum) }))
+  server.app.post<{ Params: { checksum: string } }>('/filestorage/remove/:checksum', async (req, res) => { await fileHandler.remove(req.params.checksum); return {} })
+  server.app.post('/filestorage/migrateall', async (req, res) => ({ migrated: await fileHandler.migrateLegacyFiles() }))
+  server.app.get('/filestorage/checksums', async (req, res) => {
+    const checksums: string[] = []
+    for await (const checksum of fileHandler.checksums()) checksums.push(checksum)
+    return checksums
   })
   server.app.get<{ Params: { checksum: string } }>('/filestorage/download/:checksum', async (req, res) => {
     const { checksum } = req.params
