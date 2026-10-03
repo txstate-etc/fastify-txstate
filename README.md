@@ -455,7 +455,7 @@ The `put` method streams the file to a temporary location while computing its SH
 |--------|-------------|
 | `init()` | Creates `tmpdir` and `permdir` if they don't exist. Call this before using the handler. |
 | `put(stream)` | Streams a `Readable` to storage. Returns `{ checksum, size }`. |
-| `get(checksum)` | Returns a `Readable` stream for the file. |
+| `get(checksum, range?)` | Returns a `Readable` stream for the file. Pass `{ start, end }` to read only part of it, e.g. to answer an HTTP range request. Offsets are zero-based and inclusive like `fs.createReadStream`, so `{ start: 0, end: 9 }` is the first 10 bytes; leave out `end` to read to the end of the file. Clamp the range to the file's size before calling, since a local file returns an empty stream for an out-of-bounds range while S3 and Azure Blob return 416. |
 | `remove(checksum)` | Deletes the file. No-op if already gone. |
 | `exists(checksum)` | Returns `true` if the file exists. |
 | `fileSize(checksum)` | Returns the file size in bytes. |

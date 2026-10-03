@@ -587,6 +587,20 @@ describe('fastify-txstate', () => {
       await client.post(`/filestorage/remove/${'q'.repeat(43)}`, {})
       await client.post(`/filestorage/remove/${'Q'.repeat(43)}`, {})
     })
+    it('should download a byte range of a file', async () => {
+      const formData = new FormData()
+      formData.append('file', new Blob([Buffer.from('0123456789')], { type: 'text/plain' }), 'range.txt')
+      const { data: [{ checksum }] } = await client.post('/filestorage/upload', formData)
+      const middle = await client.get(`/filestorage/download/${checksum}?start=2&end=5`, { responseType: 'arraybuffer' })
+      expect(Buffer.from(middle.data).toString()).to.equal('2345')
+      const tail = await client.get(`/filestorage/download/${checksum}?start=7`, { responseType: 'arraybuffer' })
+      expect(Buffer.from(tail.data).toString()).to.equal('789')
+    })
+    it('should download a byte range of a legacy file that has not been migrated', async () => {
+      const { data: { checksum } } = await client.post('/filestorage/legacyupload', { content: 'abcdefghij' })
+      const middle = await client.get(`/filestorage/download/${checksum}?start=2&end=5`, { responseType: 'arraybuffer' })
+      expect(Buffer.from(middle.data).toString()).to.equal('cdef')
+    })
     it('should return 404 for a non-existent checksum', async () => {
       try {
         await client.get('/filestorage/download/nonexistentchecksum')

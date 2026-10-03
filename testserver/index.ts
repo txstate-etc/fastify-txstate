@@ -166,10 +166,11 @@ server.swagger().then(async () => {
     for await (const checksum of fileHandler.checksums()) checksums.push(checksum)
     return checksums
   })
-  server.app.get<{ Params: { checksum: string } }>('/filestorage/download/:checksum', async (req, res) => {
+  server.app.get<{ Params: { checksum: string }, Querystring: { start?: string, end?: string } }>('/filestorage/download/:checksum', async (req, res) => {
     const { checksum } = req.params
     if (!(await fileHandler.exists(checksum))) throw new HttpError(404, 'File not found')
-    const stream = fileHandler.get(checksum)
+    const { start, end } = req.query
+    const stream = fileHandler.get(checksum, start == null ? undefined : { start: Number(start), end: end == null ? undefined : Number(end) })
     return await res.send(stream)
   })
 })

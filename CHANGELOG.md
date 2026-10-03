@@ -1,5 +1,11 @@
 # Changelog
 
+## 4.3.1
+
+### New Features
+
+- `FileHandler.get()` takes an optional `{ start, end }` byte range, for serving HTTP range requests (video seeking, resumed downloads). The offsets are inclusive like `fs.createReadStream`, which is also what the S3 and Azure Blob `Range` headers expect, so a cloud implementation can pass them straight through as `bytes=start-end`. A custom `FileHandler` written before this will still type-check, because TypeScript lets a function ignore trailing parameters, but it will silently send the whole file when asked for a range, so update it to honor the new parameter.
+
 ## 4.3.0
 
 ### New Features

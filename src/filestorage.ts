@@ -14,10 +14,20 @@ async function fileExists (filepath: string) {
   return (await rescue(access(filepath, constants.R_OK), false)) !== false
 }
 
+export interface FileRange {
+  start: number
+  end?: number
+}
+
 export interface FileHandler {
   init: () => Promise<void>
   put: (stream: Readable) => Promise<{ checksum: string, size: number }> // returns a checksum
-  get: (checksum: string) => Readable
+  /**
+   * Byte offsets in range are inclusive and zero-based, like fs.createReadStream, so { start: 0, end: 9 } is
+   * the first 10 bytes. Leave out end to read to the end of the file. Callers are expected to clamp the range
+   * to the file's size first, since backends disagree on what to do with an out-of-bounds range.
+   */
+  get: (checksum: string, range?: FileRange) => Readable
   remove: (checksum: string) => Promise<void>
 }
 
@@ -65,18 +75,18 @@ export class FileSystemHandler implements FileHandler {
     await mkdir(this.options.permdir, { recursive: true })
   }
 
-  async* #read (checksum: string) {
+  async* #read (checksum: string, range?: FileRange) {
     try {
-      yield* createReadStream(this.#getFileLocation(checksum))
+      yield* createReadStream(this.#getFileLocation(checksum), range)
     } catch (e: unknown) {
       if (!isENOENT(e)) throw e
-      yield* createReadStream(this.#getLegacyFileLocation(checksum))
+      yield* createReadStream(this.#getLegacyFileLocation(checksum), range)
     }
   }
 
   // get, exists, fileSize, and remove fall back to the legacy location for files that haven't been migrated
-  get (checksum: string) {
-    return Readable.from(this.#read(checksum), { objectMode: false })
+  get (checksum: string, range?: FileRange) {
+    return Readable.from(this.#read(checksum, range), { objectMode: false })
   }
 
   async exists (checksum: string) {
