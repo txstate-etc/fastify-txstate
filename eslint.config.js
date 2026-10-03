@@ -74,6 +74,7 @@ export default [
   {
     files: ['test/**/*.ts', 'testserver/**/*.ts'],
     rules: {
+      'max-nested-callbacks': 'off', // describe/it nesting
       'no-console': 'off',
       '@typescript-eslint/no-floating-promises': 'off',
       '@typescript-eslint/no-unsafe-argument': 'off',

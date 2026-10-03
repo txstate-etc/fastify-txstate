@@ -42,7 +42,8 @@
     "@types/node": "^24.0.0",
     "axios": "^1.15.0",
     "chai": "^6.0.0",
-    "eslint-config-love": "^154.0.0",
+    "eslint": "^10.0.0",
+    "eslint-config-love": "^158.0.0",
     "json-schema-to-ts": "^3.0.1",
     "typescript": "^6.0.0"
   },
