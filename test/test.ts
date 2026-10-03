@@ -587,6 +587,15 @@ describe('fastify-txstate', () => {
       await client.post(`/filestorage/remove/${'q'.repeat(43)}`, {})
       await client.post(`/filestorage/remove/${'Q'.repeat(43)}`, {})
     })
+    it('should clean up tmp files older than the threshold', async () => {
+      const { data } = await client.post('/filestorage/cleanuptmp', { ageMs: [2 * 60 * 60 * 1000, 5 * 60 * 1000, 0], olderThanMs: 60 * 60 * 1000 })
+      expect(data.deleted).to.equal(1)
+      expect(data.remaining).to.deep.equal([false, true, true, true])
+    })
+    it('should clean up day-old tmp files during init', async () => {
+      const { data } = await client.post('/filestorage/cleanuptmp', { ageMs: [25 * 60 * 60 * 1000, 23 * 60 * 60 * 1000], viaInit: true })
+      expect(data.remaining).to.deep.equal([false, true, true])
+    })
     it('should download a byte range of a file', async () => {
       const formData = new FormData()
       formData.append('file', new Blob([Buffer.from('0123456789')], { type: 'text/plain' }), 'range.txt')

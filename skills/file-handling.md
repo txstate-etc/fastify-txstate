@@ -64,7 +64,7 @@ server.app.get('/download/:checksum', async (req, res) => {
 ### Methods
 | Method | Description |
 |--------|-------------|
-| `init()` | Creates `tmpdir` and `permdir` if they don't exist. Call before using the handler. |
+| `init()` | Creates `tmpdir` and `permdir` if they don't exist and deletes tmp files left by a crash. Call before using the handler. |
 | `put(stream)` | Streams a `Readable` to storage. Returns `{ checksum, size }`. |
 | `get(checksum, range?)` | Returns a `Readable` stream for the file. Pass `{ start, end }` to read only part of it, e.g. an HTTP range request. Offsets are zero-based and inclusive. Clamp the range to the file's size before calling. |
 | `remove(checksum)` | Deletes the file. No-op if already gone. |

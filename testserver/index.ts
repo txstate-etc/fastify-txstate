@@ -1,11 +1,11 @@
 import fastifyMultipart from '@fastify/multipart'
 import type { FromSchema } from 'json-schema-to-ts'
 import { createHash } from 'node:crypto'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { access, mkdir, utimes, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { PassThrough } from 'node:stream'
-import { isBlank } from 'txstate-utils'
-import Server, { HttpError, analyticsPlugin, fileHandler, formDataFieldsFromParts, formDataFilesFromParts, jwtAuthenticate, postFormData, registerUaCookieRoutes, requireCookieAuthUa } from '../src/index.ts'
+import { isBlank, randomid, rescue } from 'txstate-utils'
+import Server, { FileSystemHandler, HttpError, analyticsPlugin, fileHandler, formDataFieldsFromParts, formDataFilesFromParts, jwtAuthenticate, postFormData, registerUaCookieRoutes, requireCookieAuthUa } from '../src/index.ts'
 
 class CustomError extends Error {}
 
@@ -161,6 +161,24 @@ server.swagger().then(async () => {
   server.app.post<{ Params: { checksum: string } }>('/filestorage/migrate/:checksum', async (req, res) => ({ migrated: await fileHandler.migrateLegacyFile(req.params.checksum) }))
   server.app.post<{ Params: { checksum: string } }>('/filestorage/remove/:checksum', async (req, res) => { await fileHandler.remove(req.params.checksum); return {} })
   server.app.post('/filestorage/migrateall', async (req, res) => ({ migrated: await fileHandler.migrateLegacyFiles() }))
+  server.app.post<{ Body: { ageMs: number[], olderThanMs?: number, viaInit?: boolean } }>('/filestorage/cleanuptmp', async (req, res) => {
+    // a private tmpdir so concurrent uploads from other tests can't be affected
+    const handler = new FileSystemHandler({ tmpdir: `/files/cleanuptest/${randomid(8)}`, permdir: '/files/storage' })
+    await mkdir(handler.options.tmpdir, { recursive: true })
+    const names = req.body.ageMs.map(() => randomid(12))
+    for (let i = 0; i < names.length; i++) {
+      const filepath = `${handler.options.tmpdir}${names[i]}`
+      await writeFile(filepath, 'partial upload')
+      const time = new Date(Date.now() - req.body.ageMs[i])
+      await utimes(filepath, time, time)
+    }
+    await writeFile(`${handler.options.tmpdir}notours.txt`, 'unrelated')
+    await utimes(`${handler.options.tmpdir}notours.txt`, new Date(0), new Date(0))
+    const deleted = req.body.viaInit ? undefined : await handler.cleanupTmp({ olderThanMs: req.body.olderThanMs })
+    if (req.body.viaInit) await handler.init()
+    const remaining = await Promise.all([...names, 'notours.txt'].map(async name => (await rescue(access(`${handler.options.tmpdir}${name}`), false)) !== false))
+    return { deleted, remaining }
+  })
   server.app.get('/filestorage/checksums', async (req, res) => {
     const checksums: string[] = []
     for await (const checksum of fileHandler.checksums()) checksums.push(checksum)

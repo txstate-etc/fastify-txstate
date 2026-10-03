@@ -73,6 +73,31 @@ export class FileSystemHandler implements FileHandler {
   async init () {
     await mkdir(this.options.tmpdir, { recursive: true })
     await mkdir(this.options.permdir, { recursive: true })
+    await this.cleanupTmp()
+  }
+
+  /**
+   * Deletes tmp files left behind by uploads that died mid-stream (crash, OOM, pod killed). Age is the only
+   * safe signal when tmpdir is shared between replicas, so only files whose mtime is older than olderThanMs
+   * are removed. Some network filesystems (e.g. Azure Files over SMB) don't update mtime until the file is
+   * closed, so olderThanMs must be longer than your longest upload. Returns the number of files deleted.
+   */
+  async cleanupTmp ({ olderThanMs = 24 * 60 * 60 * 1000 }: { olderThanMs?: number } = {}) {
+    const cutoff = Date.now() - olderThanMs
+    let count = 0
+    for (const f of await readdir(this.options.tmpdir, { withFileTypes: true })) {
+      // only touch names put() could have generated, in case tmpdir is shared with something else
+      if (!f.isFile() || !/^[a-z0-9]{12}$/v.test(f.name)) continue
+      const filepath = `${this.options.tmpdir}${f.name}`
+      try {
+        if ((await stat(filepath)).mtimeMs >= cutoff) continue
+        await unlink(filepath)
+        count += 1
+      } catch (e: unknown) {
+        if (!isENOENT(e)) throw e // put() moved it to storage or another replica deleted it
+      }
+    }
+    return count
   }
 
   async* #read (checksum: string, range?: FileRange) {

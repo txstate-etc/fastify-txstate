@@ -453,12 +453,13 @@ The `put` method streams the file to a temporary location while computing its SH
 
 | Method | Description |
 |--------|-------------|
-| `init()` | Creates `tmpdir` and `permdir` if they don't exist. Call this before using the handler. |
+| `init()` | Creates `tmpdir` and `permdir` if they don't exist and deletes tmp files left by a crash. Call this before using the handler. |
 | `put(stream)` | Streams a `Readable` to storage. Returns `{ checksum, size }`. |
 | `get(checksum, range?)` | Returns a `Readable` stream for the file. Pass `{ start, end }` to read only part of it, e.g. to answer an HTTP range request. Offsets are zero-based and inclusive like `fs.createReadStream`, so `{ start: 0, end: 9 }` is the first 10 bytes; leave out `end` to read to the end of the file. Clamp the range to the file's size before calling, since a local file returns an empty stream for an out-of-bounds range while S3 and Azure Blob return 416. |
 | `remove(checksum)` | Deletes the file. No-op if already gone. |
 | `exists(checksum)` | Returns `true` if the file exists. |
 | `fileSize(checksum)` | Returns the file size in bytes. |
+| `cleanupTmp({ olderThanMs? })` | Deletes tmp files left behind by interrupted uploads that are older than `olderThanMs` (default 24 hours). `init()` already does this, but you can also call it periodically if your process runs for a long time. |
 | `migrateLegacyFiles()` | Runs `migrateLegacyFile` on every legacy file in storage. Returns the number of files moved. |
 | `checksums()` | Async iterator over the base64url checksum of every stored file, including legacy files that haven't been migrated. On a case-insensitive filesystem (e.g. Azure Files over SMB) the case of folder names can be lost, so legacy files are hashed to recover their checksum and skipped if their contents don't match their name. Hashing is skipped once the presence of both an `x/` and an `X/` folder proves the filesystem is case-sensitive. |
 | `migrateLegacyFile(checksum)` | Moves a file stored by an older version under its base64url name to its hex location. Returns `false` if there was no legacy file. |

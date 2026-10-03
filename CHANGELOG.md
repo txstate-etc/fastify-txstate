@@ -1,5 +1,11 @@
 # Changelog
 
+## 4.3.3
+
+### Fixes
+
+- `FileSystemHandler.init()` now deletes tmp files more than a day old, left behind when the process died mid-upload. If you want to clean them up more often, call the new `cleanupTmp()` periodically.
+
 ## 4.3.2
 
 ### Notes
