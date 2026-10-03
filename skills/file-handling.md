@@ -38,7 +38,7 @@ The third argument is an optional headers object.
 
 ## File Storage with FileSystemHandler
 
-`FileSystemHandler` streams uploaded files to the local filesystem, named by their hex-encoded SHA-256 checksum. `put` returns the shorter base64url form for storing in your database; every method accepts either form. Identical files are automatically deduplicated. Files are stored in a two-level directory structure based on the checksum (`a/b/cdef...`) to avoid overwhelming a single directory.
+`FileSystemHandler` streams uploaded files to the local filesystem, named by their hex-encoded SHA-256 checksum. `put` returns the shorter base64url form for storing in your database; every method accepts either form. Identical files are automatically deduplicated. Files are stored in a two-level directory structure based on the checksum (`ab/cd/ef01...`) to avoid overwhelming a single directory.
 
 ```javascript
 import Server, { FileSystemHandler } from 'fastify-txstate'

@@ -1,5 +1,11 @@
 # Changelog
 
+## 4.3.2
+
+### Notes
+
+- `FileSystemHandler` now uses two hex characters per folder level (`ab/cd/ef01...`) instead of one (`a/b/cdef...`), so storage spreads across 65,536 folders instead of 256 and no folder gets crowded even with tens of millions of files. This also keeps the hex folders from ever sharing a name with the single-character folders of the old base64url layout. Nobody had installed 4.3.0 or 4.3.1 yet, so there's nothing to migrate. Files from before 4.3.0 are still found and migrated as described under 4.3.0.
+
 ## 4.3.1
 
 ### New Features

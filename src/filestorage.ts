@@ -50,7 +50,7 @@ export class FileSystemHandler implements FileHandler {
   #getFileLocation (checksum: string) {
     // 43 chars is a base64url sha256
     if (checksum.length === 43) checksum = Buffer.from(checksum, 'base64url').toString('hex')
-    return `${this.options.permdir}${checksum.slice(0, 1)}/${checksum.slice(1, 2)}/${checksum.slice(2)}`
+    return `${this.options.permdir}${checksum.slice(0, 2)}/${checksum.slice(2, 4)}/${checksum.slice(4)}`
   }
 
   #getLegacyFileLocation (checksum: string) {
@@ -160,23 +160,32 @@ export class FileSystemHandler implements FileHandler {
    * and skipped if their contents don't match their name.
    */
   async* checksums () {
-    const top = (await readdir(this.options.permdir, { withFileTypes: true })).filter(a => a.isDirectory() && /^[\w\-]$/v.test(a.name))
-    const names = new Set(top.map(a => a.name))
+    const top = (await readdir(this.options.permdir, { withFileTypes: true })).filter(a => a.isDirectory())
+    const legacyNames = new Set(top.filter(a => /^[\w\-]$/v.test(a.name)).map(a => a.name))
     // seeing both x/ and X/ proves the filesystem is case-sensitive, so legacy names can be trusted without rehashing
-    const caseSensitive = top.some(a => a.name !== a.name.toLowerCase() && names.has(a.name.toLowerCase()))
+    const caseSensitive = [...legacyNames].some(name => name !== name.toLowerCase() && legacyNames.has(name.toLowerCase()))
     for (const a of top) {
+      const legacy = legacyNames.has(a.name)
+      if (!legacy && !/^[0-9a-f]{2}$/v.test(a.name)) continue
       for await (const b of await opendir(`${this.options.permdir}${a.name}`)) {
-        if (!b.isDirectory() || !/^[\w\-]$/v.test(b.name)) continue
+        if (!b.isDirectory() || !(legacy ? /^[\w\-]$/v : /^[0-9a-f]{2}$/v).test(b.name)) continue
         // read the whole leaf up front so callers can rename files during iteration
         for (const f of await readdir(`${this.options.permdir}${a.name}/${b.name}`, { withFileTypes: true })) {
           if (!f.isFile()) continue
-          // on case-insensitive filesystems, folder names may not match the case of the checksum
           const name = a.name + b.name + f.name
-          if (/^[0-9a-f]{64}$/v.test(name.toLowerCase())) yield Buffer.from(name, 'hex').toString('base64url')
-          else if (/^[\w\-]{43}$/v.test(name)) {
+          if (!legacy) {
+            if (/^[0-9a-f]{64}$/v.test(name)) yield Buffer.from(name, 'hex').toString('base64url')
+          } else if (/^[\w\-]{43}$/v.test(name)) {
             if (caseSensitive) yield name
             else {
-              const checksum = await this.#hashFile(`${this.options.permdir}${a.name}/${b.name}/${f.name}`)
+              // on case-insensitive filesystems, legacy folder names may not match the case of the checksum
+              let checksum: string
+              try {
+                checksum = await this.#hashFile(`${this.options.permdir}${a.name}/${b.name}/${f.name}`)
+              } catch (e: unknown) {
+                if (isENOENT(e)) continue // moved or removed since we read the folder
+                throw e
+              }
               if (checksum.toLowerCase() === name.toLowerCase()) yield checksum // skip corrupted files
             }
           }

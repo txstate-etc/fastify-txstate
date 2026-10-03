@@ -425,7 +425,7 @@ You can also pass custom headers as a third argument: `postFormData(url, fields,
 # File Storage with FileSystemHandler
 `FileSystemHandler` provides an opinionated way to stream uploaded files into the local filesystem, named by their SHA-256 checksum. Since identical files produce the same checksum, duplicates are automatically deduplicated — uploading the same file twice stores it only once.
 
-Files are organized into a two-level directory structure based on the checksum (`a/b/cdef...`) to avoid overwhelming a single directory with too many entries.
+Files are organized into a two-level directory structure based on the checksum (`ab/cd/ef01...`) to avoid overwhelming a single directory with too many entries.
 
 ```javascript
 import Server, { FileSystemHandler } from 'fastify-txstate'
