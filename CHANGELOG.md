@@ -1,5 +1,11 @@
 # Changelog
 
+## 4.3.4
+
+### Fixes
+
+- `FileSystemHandler.remove()` and `migrateLegacyFile()` now also delete the folders they leave empty, so storage doesn't accumulate thousands of empty folders over time, and the old base64url folders disappear as their files are migrated.
+
 ## 4.3.3
 
 ### Fixes

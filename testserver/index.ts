@@ -3,7 +3,7 @@ import type { FromSchema } from 'json-schema-to-ts'
 import { createHash } from 'node:crypto'
 import { access, mkdir, utimes, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import { PassThrough } from 'node:stream'
+import { PassThrough, Readable } from 'node:stream'
 import { isBlank, randomid, rescue } from 'txstate-utils'
 import Server, { FileSystemHandler, HttpError, analyticsPlugin, fileHandler, formDataFieldsFromParts, formDataFilesFromParts, jwtAuthenticate, postFormData, registerUaCookieRoutes, requireCookieAuthUa } from '../src/index.ts'
 
@@ -178,6 +178,35 @@ server.swagger().then(async () => {
     if (req.body.viaInit) await handler.init()
     const remaining = await Promise.all([...names, 'notours.txt'].map(async name => (await rescue(access(`${handler.options.tmpdir}${name}`), false)) !== false))
     return { deleted, remaining }
+  })
+  server.app.post('/filestorage/removeprune', async (req, res) => {
+    // a private permdir so files from other tests can't share our folders
+    const handler = new FileSystemHandler({ tmpdir: '/files/tmp', permdir: `/files/prunetest/${randomid(8)}` })
+    await handler.init()
+    const { checksum } = await handler.put(Readable.from([Buffer.from('prune me')]))
+    const hex = Buffer.from(checksum, 'base64url').toString('hex')
+    const top = `${handler.options.permdir}${hex.slice(0, 2)}`
+    const exists = async (path: string) => (await rescue(access(path), false)) !== false
+    // a sibling that shares the top folder but not the second
+    const siblingHex = hex.slice(0, 2) + (hex.slice(2, 4) === 'ff' ? '00' : 'ff') + hex.slice(4)
+    await mkdir(`${top}/${siblingHex.slice(2, 4)}`, { recursive: true })
+    await writeFile(`${top}/${siblingHex.slice(2, 4)}/${siblingHex.slice(4)}`, 'sibling')
+    await handler.remove(checksum)
+    const afterFirst = { leaf: await exists(`${top}/${hex.slice(2, 4)}`), top: await exists(top) }
+    await handler.remove(siblingHex)
+    const afterSecond = { top: await exists(top), permdir: await exists(handler.options.permdir) }
+    return { afterFirst, afterSecond }
+  })
+  server.app.post('/filestorage/migrateprune', async (req, res) => {
+    const handler = new FileSystemHandler({ tmpdir: '/files/tmp', permdir: `/files/prunetest/${randomid(8)}` })
+    await handler.init()
+    const checksum = createHash('sha256').update('migrate and prune me').digest('base64url')
+    const top = `${handler.options.permdir}${checksum.slice(0, 1)}`
+    await mkdir(`${top}/${checksum.slice(1, 2)}`, { recursive: true })
+    await writeFile(`${top}/${checksum.slice(1, 2)}/${checksum.slice(2)}`, 'migrate and prune me')
+    const migrated = await handler.migrateLegacyFile(checksum)
+    const exists = async (path: string) => (await rescue(access(path), false)) !== false
+    return { migrated, legacyTop: await exists(top), stored: await handler.exists(checksum) }
   })
   server.app.get('/filestorage/checksums', async (req, res) => {
     const checksums: string[] = []

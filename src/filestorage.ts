@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
-import { access, constants, mkdir, opendir, readdir, rename, unlink, stat } from 'node:fs/promises'
+import { access, constants, mkdir, readdir, rename, rmdir, unlink, stat } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
@@ -8,6 +8,16 @@ import { rescue, randomid } from 'txstate-utils'
 
 function isENOENT (e: unknown) {
   return (e as NodeJS.ErrnoException).code === 'ENOENT'
+}
+
+// another replica may have pruned the folder since we listed its parent
+async function readdirIfExists (dirpath: string) {
+  try {
+    return await readdir(dirpath, { withFileTypes: true })
+  } catch (e: unknown) {
+    if (isENOENT(e)) return []
+    throw e
+  }
 }
 
 async function fileExists (filepath: string) {
@@ -66,8 +76,34 @@ export class FileSystemHandler implements FileHandler {
 
   async #moveToPerm (tmp: string, checksum: string) {
     const checksumpath = this.#getFileLocation(checksum)
-    await mkdir(dirname(checksumpath), { recursive: true })
-    await rename(tmp, checksumpath)
+    for (let attempt = 1; ; attempt++) {
+      await mkdir(dirname(checksumpath), { recursive: true })
+      try {
+        await rename(tmp, checksumpath)
+        return
+      } catch (e: unknown) {
+        // remove() or a migration may have pruned the empty folder between our mkdir and rename
+        if (!isENOENT(e) || attempt >= 3) throw e
+      }
+    }
+  }
+
+  // rmdir only succeeds on an empty directory, atomically, so this can't delete a file another replica just added
+  async #removeEmptyDir (dir: string) {
+    try {
+      await rmdir(dir)
+      return true
+    } catch (e: unknown) {
+      const code = (e as NodeJS.ErrnoException).code
+      if (code === 'ENOENT') return true
+      if (code === 'ENOTEMPTY' || code === 'EEXIST') return false
+      throw e
+    }
+  }
+
+  async #removeEmptyParents (filepath: string) {
+    const parent = dirname(filepath)
+    if (await this.#removeEmptyDir(parent)) await this.#removeEmptyDir(dirname(parent))
   }
 
   async init () {
@@ -161,11 +197,12 @@ export class FileSystemHandler implements FileHandler {
     try {
       if (await fileExists(this.#getFileLocation(checksum))) await unlink(legacypath)
       else await this.#moveToPerm(legacypath, checksum)
-      return true
     } catch (e: unknown) {
       if (isENOENT(e)) return false // a concurrent migration or remove got there first
       throw e
     }
+    await this.#removeEmptyParents(legacypath)
+    return true
   }
 
   /**
@@ -192,10 +229,10 @@ export class FileSystemHandler implements FileHandler {
     for (const a of top) {
       const legacy = legacyNames.has(a.name)
       if (!legacy && !/^[0-9a-f]{2}$/v.test(a.name)) continue
-      for await (const b of await opendir(`${this.options.permdir}${a.name}`)) {
+      for (const b of await readdirIfExists(`${this.options.permdir}${a.name}`)) {
         if (!b.isDirectory() || !(legacy ? /^[\w\-]$/v : /^[0-9a-f]{2}$/v).test(b.name)) continue
         // read the whole leaf up front so callers can rename files during iteration
-        for (const f of await readdir(`${this.options.permdir}${a.name}/${b.name}`, { withFileTypes: true })) {
+        for (const f of await readdirIfExists(`${this.options.permdir}${a.name}/${b.name}`)) {
           if (!f.isFile()) continue
           const name = a.name + b.name + f.name
           if (!legacy) {
@@ -225,8 +262,10 @@ export class FileSystemHandler implements FileHandler {
       try {
         await unlink(filepath)
       } catch (e: unknown) {
-        if (!isENOENT(e)) throw e
+        if (isENOENT(e)) continue
+        throw e
       }
+      await this.#removeEmptyParents(filepath)
     }
   }
 }

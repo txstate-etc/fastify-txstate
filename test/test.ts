@@ -587,6 +587,15 @@ describe('fastify-txstate', () => {
       await client.post(`/filestorage/remove/${'q'.repeat(43)}`, {})
       await client.post(`/filestorage/remove/${'Q'.repeat(43)}`, {})
     })
+    it('should remove empty folders after removing a file, but not folders that still hold files', async () => {
+      const { data } = await client.post('/filestorage/removeprune', {})
+      expect(data.afterFirst).to.deep.equal({ leaf: false, top: true })
+      expect(data.afterSecond).to.deep.equal({ top: false, permdir: true })
+    })
+    it('should remove empty legacy folders after migrating a file', async () => {
+      const { data } = await client.post('/filestorage/migrateprune', {})
+      expect(data).to.deep.equal({ migrated: true, legacyTop: false, stored: true })
+    })
     it('should clean up tmp files older than the threshold', async () => {
       const { data } = await client.post('/filestorage/cleanuptmp', { ageMs: [2 * 60 * 60 * 1000, 5 * 60 * 1000, 0], olderThanMs: 60 * 60 * 1000 })
       expect(data.deleted).to.equal(1)
