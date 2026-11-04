@@ -1,13 +1,30 @@
 import fastifyMultipart from '@fastify/multipart'
+import { context, logs as apiLogs, metrics as apiMetrics, propagation, SpanStatusCode, trace as apiTrace } from '@opentelemetry/api'
 import type { FromSchema } from 'json-schema-to-ts'
 import { createHash } from 'node:crypto'
+import { tracingChannel } from 'node:diagnostics_channel'
+import { get as httpGet } from 'node:http'
 import { access, mkdir, utimes, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { PassThrough, Readable } from 'node:stream'
-import { isBlank, randomid, rescue } from 'txstate-utils'
-import Server, { FileSystemHandler, HttpError, analyticsPlugin, fileHandler, formDataFieldsFromParts, formDataFilesFromParts, jwtAuthenticate, postFormData, registerUaCookieRoutes, requireCookieAuthUa } from '../src/index.ts'
+import { isBlank, randomid, rescue, sleep } from 'txstate-utils'
+import Server, { FileSystemHandler, HttpError, SeverityNumber, SpanKind, analyticsPlugin, fileHandler, formDataFieldsFromParts, formDataFilesFromParts, jwtAuthenticate, logs, metrics, postFormData, registerUaCookieRoutes, reportError, requireCookieAuthUa, trace, traceJob } from '../src/index.ts'
 
 class CustomError extends Error {}
+
+// what a library recording through @opentelemetry/api gets, made before Server starts telemetry
+const libMeter = apiMetrics.getMeter('testlib', '0.1.0')
+const libQueued = libMeter.createUpDownCounter('testlib.queued', { unit: '{job}' })
+const libTemperature = libMeter.createGauge('testlib.temperature', { unit: 'Cel' })
+const libCpu = libMeter.createObservableCounter('testlib.cpu.time', { unit: 's' })
+libCpu.addCallback(result => { result.observe(12.5) })
+const libConnections = libMeter.createObservableUpDownCounter('testlib.connections', { unit: '{connection}' })
+// libCpu isn't registered with this callback, so its observation is ignored
+libMeter.addBatchObservableCallback(result => {
+  result.observe(libConnections, 4, { 'testlib.pool': 'main' })
+  result.observe(libCpu, 999)
+}, [libConnections])
+const libLogger = apiLogs.getLogger('testlib', '0.1.0')
 
 const server = new Server({
   trustProxy: true,
@@ -47,6 +64,19 @@ const typedInputRecursive = {
 } as const
 export type TypedInput = FromSchema<typeof typedInput>
 export type TypedInputRecursive = TypedInput & { more?: TypedInputRecursive[] }
+// what an app's own instrumentation looks like
+const meter = metrics.getMeter('testserver', '1.2.3')
+const telemetryHits = meter.createCounter('testserver.telemetry.hits', { description: 'Requests to /telemetry', unit: '{request}' })
+meter.createObservableGauge('testserver.queue.depth', { description: 'Jobs waiting', unit: '{job}' }).addCallback(result => {
+  result.observe(7, { 'testserver.queue': 'email' })
+})
+const logger = logs.getLogger('testserver', '1.2.3')
+const cardinality = meter.createCounter('testserver.cardinality')
+const duration = meter.createHistogram('testserver.duration', { description: 'How long the job took', unit: 's', advice: { explicitBucketBoundaries: [0.1, 1, 10] } })
+const appTracer = trace.getTracer('testserver', '1.2.3')
+// what a library using @opentelemetry/api gets, since fastify-txstate registers as its global provider
+const tracer = apiTrace.getTracer('testserver', '1.2.3')
+
 server.swagger().then(async () => {
   await server.app.register(analyticsPlugin, { appName: 'testserver' })
   await server.app.register(fastifyMultipart)
@@ -80,6 +110,90 @@ server.swagger().then(async () => {
     stream.end()
   })
   server.app.get('/proxy', async (req, res) => ({ protocol: req.protocol, host: req.host, hostname: req.hostname }))
+  // the test container echoes request headers back, so the test can see what we propagated
+  server.app.get('/tracing', async (req, res) => {
+    const viaFetch = await (await fetch('http://fastify-test:4318/echo')).json() as Record<string, string>
+    const viaHttp = await new Promise<Record<string, string>>((resolve, reject) => {
+      httpGet('http://fastify-test:4318/echo?token=secret', resp => {
+        let body = ''
+        resp.on('data', (chunk: Buffer) => { body += chunk.toString() })
+        resp.on('end', () => { resolve(JSON.parse(body)) })
+      }).on('error', reject)
+    })
+    return { fetch: viaFetch.traceparent, http: viaHttp.traceparent }
+  })
+  // publishes what mysql2 does, with the values already inlined into the query
+  server.app.get('/tracing/db', async (req, res) => {
+    await tracingChannel('mysql2:query').tracePromise(async () => { await sleep(5) }, { query: "SELECT * FROM `users` u JOIN roles r ON r.userId = u.id WHERE u.name = 'o\\'brien' AND u.age > 21", values: [], database: 'app', serverAddress: 'db', serverPort: 3306 })
+    return {}
+  })
+  // publishes what mongoose does: a find, then a save that hits a duplicate key
+  server.app.get('/tracing/mongo', async (req, res) => {
+    const conn = { database: 'app', serverAddress: 'mongo', serverPort: 27017 }
+    await tracingChannel('mongoose:query').tracePromise(async () => { await sleep(5) }, { operation: 'find', collection: 'users', ...conn, args: { filter: { name: 'secret' } } })
+    const duplicate = Object.assign(new Error('E11000 duplicate key error'), { code: 11000, codeName: 'DuplicateKey' })
+    await rescue(tracingChannel('mongoose:model:save').tracePromise(async () => { await sleep(5); throw duplicate }, { operation: 'save', collection: 'users', ...conn, args: {} }))
+    return {}
+  })
+  // what a library that makes spans through @opentelemetry/api does
+  server.app.get('/tracing/api', async (req, res) => await tracer.startActiveSpan('testserver.work', { attributes: { 'testserver.tags': ['a', 'b'] } }, async span => {
+    await fetch('http://fastify-test:4318/echo')
+    const carrier: Record<string, string> = {}
+    propagation.inject(context.active(), carrier)
+    span.setStatus({ code: SpanStatusCode.ERROR, message: 'partly failed' })
+    span.end()
+    return { injected: carrier.traceparent }
+  }))
+  // what an app's own span looks like, e.g. ai-broker recording a model call
+  server.app.get('/tracing/app', async (req, res) => await appTracer.startActiveSpan('chat test-model', { kind: SpanKind.CLIENT, attributes: { 'gen_ai.operation.name': 'chat', 'gen_ai.request.model': 'test-model' } }, async span => {
+    try {
+      await fetch('http://fastify-test:4318/echo')
+      span.setAttributes({ 'gen_ai.usage.input_tokens': 1200, 'gen_ai.usage.output_tokens': 300 })
+      return {}
+    } finally {
+      span.end()
+    }
+  }))
+  // 2005 attribute sets: 2000 get series of their own, the last 5 share the overflow series
+  server.app.get('/telemetry/cardinality', async (req, res) => {
+    for (let i = 0; i < 2005; i++) cardinality.add(1, { 'testserver.id': i })
+    cardinality.add(1, { 'testserver.id': 0 })
+    return {}
+  })
+  server.app.get('/telemetry/histogram', async (req, res) => {
+    for (const seconds of [0.05, 0.5, 1, 20]) duration.record(seconds, { 'testserver.kind': 'test' })
+    return {}
+  })
+  server.app.get('/telemetry/api', async (req, res) => {
+    libQueued.add(5)
+    libQueued.add(-2)
+    libTemperature.record(30)
+    libTemperature.record(21.5)
+    libLogger.emit({ eventName: 'testlib.failed', severityNumber: SeverityNumber.ERROR, exception: new TypeError('bad input'), attributes: { 'testlib.step': 'parse' } })
+    return {}
+  })
+  server.app.get('/telemetry', async (req, res) => {
+    telemetryHits.add(1, { 'testserver.kind': 'test' })
+    logger.emit({ eventName: 'testserver.hit', severityNumber: SeverityNumber.WARN, severityText: 'WARN', body: 'hit the telemetry route', attributes: { 'testserver.kind': 'test' } })
+    return {}
+  })
+  // an app catching its own error and reporting it
+  server.app.get('/telemetry/report', async (req, res) => {
+    reportError(new CustomError('could not reach the mail server'), { 'testserver.kind': 'test' })
+    return {}
+  })
+  // what a cron task looks like, run here so the test can trigger it
+  server.app.get('/telemetry/job', async (req, res) => {
+    try {
+      await traceJob('testserver.cleanup', async () => {
+        await fetch('http://fastify-test:4318/echo')
+        throw new Error('cleanup failed')
+      }, { 'testserver.job': 'cleanup' })
+    } catch {
+      return { rethrown: true }
+    }
+    return { rethrown: false }
+  })
   server.app.get('/logging', async (req, res) => {
     res.extraLogInfo = { hello: 'world' }
     return { success: true }

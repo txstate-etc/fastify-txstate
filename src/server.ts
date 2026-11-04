@@ -16,6 +16,8 @@ import type { OpenAPIV3 } from 'openapi-types'
 import { clone, destroyNulls, isBlank, isNotBlank, omit, set, sleep, stringifyDates, toArray } from 'txstate-utils'
 import { HttpError, ValidationError, ValidationErrors, fstValidationToMessage } from './error.ts'
 import { getOAuthIssuerUrls, getProtectedResourceMetadataConfig, protectedResourceMetadataPath } from './jwt-auth.ts'
+import { flushTelemetry, startTelemetry } from './telemetry.ts'
+import { measureRequests, recordRequestErrors, traceRequests } from './tracing.ts'
 
 // Routes contributed by registerOAuthCookieRoutes / registerUaCookieRoutes. The Server's
 // onRequest auth hook consults these at request time — except routes skip authentication
@@ -331,6 +333,12 @@ export default class Server {
     config.ajv = { ...config.ajv, mode: undefined, plugins: [...(config.ajv?.plugins ?? []), ajvErrors as unknown as Plugin<unknown>, [ajvFormats as unknown as Plugin<unknown>, { mode: 'fast' }]], customOptions: { ...config.ajv?.customOptions, allErrors: true, strictSchema: false } }
     this.healthCallback = config.checkHealth
     this.app = fastify(config as FastifyServerOptions)
+    startTelemetry()
+    this.app.addHook('onClose', flushTelemetry)
+    // before traceRequests, whose onResponse ends the span this records on
+    recordRequestErrors(this.app)
+    traceRequests(this.app)
+    measureRequests(this.app)
     this.app.addHook('onRoute', route => {
       if (!route.schema?.body) return
       const existingResponse = (route.schema.response ?? {
@@ -464,7 +472,6 @@ export default class Server {
       })
     this.app.setNotFoundHandler((req, res) => { void res.status(404).send('Not Found.') })
     this.app.setErrorHandler(async (err: FastifyError, req, res) => {
-      req.log.warn(err)
       for (const errorHandler of this.errorHandlers) {
         if (!res.sent) await errorHandler(err, req, res)
       }
@@ -497,6 +504,8 @@ export default class Server {
           await res.status(500).send('Internal Server Error.')
         }
       }
+      if (res.statusCode >= 500) req.log.error(err)
+      else req.log.warn(err)
     })
     // RFC 9728 section 5.1: point 401 responses at the protected resource metadata
     // document so clients can discover it by making an unauthenticated request and

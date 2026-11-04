@@ -6,6 +6,8 @@ import { Cache, isBlank, omit, pick } from 'txstate-utils'
 import { type IBrowser, UAParser, type IDevice, type IOS } from 'ua-parser-js'
 import { HttpError } from './error.ts'
 import { registeredOptionalRoutes, type FastifyTxStateAuthInfo } from './server.ts'
+import { logs, SeverityNumber, startTelemetry, telemetryEnabled, type Attributes } from './telemetry.ts'
+import { untracedRoutes } from './tracing.ts'
 
 export interface StoredInteractionEvent extends InteractionEvent {
   '@timestamp': string
@@ -79,19 +81,52 @@ export class ElasticAnalyticsClient extends AnalyticsClient {
   }
 }
 
+/** nested objects become dotted keys, e.g. browser.name; arrays are stored as JSON */
+function flattenAttributes (obj: object, prefix = '', attributes: Attributes = {}) {
+  for (const [key, value] of Object.entries(obj) as [string, unknown][]) {
+    if (Array.isArray(value)) attributes[prefix + key] = JSON.stringify(value)
+    else if (typeof value === 'object' && value != null) flattenAttributes(value, `${prefix}${key}.`, attributes)
+    else if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') attributes[prefix + key] = value
+  }
+  return attributes
+}
+
+/**
+ * Sends events as OTLP log records named `analytics.interaction`, through the exporter in
+ * telemetry.ts, so it's configured with the OTEL_EXPORTER_OTLP_ environment variables.
+ */
+export class OtlpAnalyticsClient extends AnalyticsClient {
+  private logger = logs.getLogger('fastify-txstate')
+
+  constructor () {
+    super()
+    startTelemetry()
+  }
+
+  async push (events: StoredInteractionEvent[]) {
+    for (const { '@timestamp': timestamp, ...event } of events) {
+      this.logger.emit({ eventName: 'analytics.interaction', severityNumber: SeverityNumber.INFO, severityText: 'INFO', timestamp: new Date(timestamp), attributes: flattenAttributes(event) })
+    }
+  }
+}
+
 export function analyticsPlugin (fastify: FastifyInstance, opts: { appName: string, analyticsClient?: AnalyticsClient, authorize?: true | ((req: FastifyRequest) => boolean) }, done: (err?: Error) => void) {
   const environment = process.env.NODE_ENV!
   if (isBlank(environment)) throw new Error('Must set NODE_ENV when reporting analytics.')
 
   registeredOptionalRoutes.add(fastify.prefix + '/analytics')
+  untracedRoutes.add(fastify.prefix + '/analytics')
 
   const eventQueue: QueuedEventItem[] = []
+  startTelemetry()
   const analyticsClient = opts.analyticsClient ?? (
-    isBlank(process.env.ELASTICSEARCH_URL)
-      ? environment === 'development'
-        ? new AnalyticsClient()
-        : new LoggingAnalyticsClient(fastify.log)
-      : new ElasticAnalyticsClient()
+    telemetryEnabled('logs')
+      ? new OtlpAnalyticsClient()
+      : isBlank(process.env.ELASTICSEARCH_URL)
+        ? environment === 'development'
+          ? new AnalyticsClient()
+          : new LoggingAnalyticsClient(fastify.log)
+        : new ElasticAnalyticsClient()
   )
 
   const UACache = new Cache(async (ua: string) => {
@@ -128,11 +163,29 @@ export function analyticsPlugin (fastify: FastifyInstance, opts: { appName: stri
     } catch (e) {
       eventQueue.push(...eventQueueSlice)
       console.error(e) // eslint-disable-line no-console -- no logger available in this context
-    } finally {
-      setTimeout(() => { void flushQueue() }, 5000)
     }
   }
-  setTimeout(() => { void flushQueue() }, 5000)
+
+  let flushTimer: NodeJS.Timeout | undefined
+  let flushing: Promise<void> | undefined
+  let closing = false
+  function scheduleFlush () {
+    flushTimer = setTimeout(() => {
+      flushing = flushQueue().finally(() => {
+        flushing = undefined
+        if (!closing) scheduleFlush()
+      })
+    }, 5000)
+  }
+  scheduleFlush()
+
+  // runs before Server's flushTelemetry hook, so OTLP events go out in the same close
+  fastify.addHook('onClose', async () => {
+    closing = true
+    clearTimeout(flushTimer)
+    await flushing
+    await flushQueue()
+  })
 
   function queueEvents (auth: Partial<FastifyTxStateAuthInfo> & { username: string }, headers: IncomingHttpHeaders, remoteIp: string, events: InteractionEvent[]) {
     for (const event of events) {

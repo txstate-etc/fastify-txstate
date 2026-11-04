@@ -1,5 +1,37 @@
 # Changelog
 
+## 4.4.0 (in progress)
+
+### New Features
+
+- Built-in OpenTelemetry export of metrics, logs and traces, with no SDK to install. Set `OTEL_EXPORTER_OTLP_ENDPOINT` and `Server` starts sending to it. Leave it unset and everything below is a no-op, so instrumentation can stay in your code everywhere.
+- What you get automatically:
+  - **Traces**: a span for every request (except `/health` and `/analytics`), continuing the caller's `traceparent`, with child spans for outgoing `fetch`/`node:http` calls, mysql2/oracle-async queries and mongoose (9.7+) operations. Outgoing requests carry a `traceparent` so the next service joins the same trace.
+  - **Metrics**: `http.server.request.duration`, per the HTTP semantic conventions.
+  - **Logs**: every error that ends in a 5xx, as an `http.server.request.exception` log record tied to its trace.
+  - Every request's log lines get `trace_id` and `span_id`.
+- New exports for reporting your own telemetry, with the same names and shapes as `@opentelemetry/api`, so the upstream docs apply:
+  - `metrics.getMeter(name)` for every instrument the API has: counters, up-down counters, gauges, histograms, and the observable kinds.
+  - `logs.getLogger(name)` for structured log records, stamped with the current trace.
+  - `trace.getTracer(name)` for spans of your own, like one around an LLM call with its token counts.
+  - `traceJob(name, task)` runs a background task, like a cron job, as its own trace. Without it, a job's outgoing calls and queries go untraced. A failure is reported and then rethrown.
+  - `reportError(error)` for errors you catch yourself but want someone to see. Errors that turn into a 5xx are already reported.
+- `analyticsPlugin` sends interaction events as OTLP log records when logs export is enabled, and now flushes its queue when the server closes instead of losing the last few seconds of events on every deploy.
+
+### Notes
+
+- Errors reaching the error handler are now logged at `error` level when the response is a 5xx and `warn` otherwise, instead of always `warn`.
+- New dependency on `@opentelemetry/api` (the API package only, no SDK). We register as its global tracer, meter and logger providers, so apps and libraries can record through the API itself, and our `trace`, `metrics` and `logs` exports are just shortcuts to the same thing. If another SDK registered first, it wins and we warn.
+
+### OpenTelemetry details
+
+- We read the official SDK's environment variables: `OTEL_EXPORTER_OTLP_ENDPOINT` and its per-signal `_ENDPOINT` and `_HEADERS` variants, `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`, `OTEL_SDK_DISABLED`, `OTEL_METRIC_EXPORT_INTERVAL` (default 60s), `OTEL_{TRACES,METRICS,LOGS}_EXPORTER` (`otlp` or `none`), and `OTEL_TRACES_SAMPLER`/`_ARG` (all but the remote samplers).
+- `OTLP_PASSWORD` sends basic auth with the service name as the username. `NODE_ENV` becomes `deployment.environment.name` and `CI_GIT_VERSION` becomes `service.version`, unless `OTEL_RESOURCE_ATTRIBUTES` sets them.
+- A failed export is retried for up to 10 seconds, then dropped, and only the first failure in a streak is logged. Metrics recover on the next export, but a dropped log or span batch is gone.
+- Each metric keeps at most 2000 attribute sets; past that, new ones are lumped under `otel.metric.overflow` with a warning, which almost always means an id or full URL ended up in an attribute.
+- `token` and `unifiedJwt` query parameters are redacted from recorded URLs, mysql2 query text has its literals replaced with `?`, and mongoose filters and documents are never recorded.
+- `startTelemetry()`, `telemetryEnabled(signal)` and `flushTelemetry()` are exported for using any of this outside `Server`, e.g. in a standalone worker script. `OtlpAnalyticsClient` is exported too.
+
 ## 4.3.4
 
 ### Fixes

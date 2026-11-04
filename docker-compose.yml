@@ -7,9 +7,16 @@ services:
     depends_on:
       - fastify-http
       - fastify-https
+      - otel-collector
   fakeauth:
     image: registry.its.txstate.edu/unified-auth-stub:dev
     attach: false
+  otel-collector:
+    image: otel/opentelemetry-collector:0.164.0
+    attach: false
+    command: [--config=/etc/otelcol/test-config.yaml]
+    volumes:
+      - ./test/otel-collector.yaml:/etc/otelcol/test-config.yaml:ro
   fastify-http:
     build:
       context: .
@@ -27,7 +34,14 @@ services:
       context: .
       dockerfile: Dockerfile.https
     attach: false
+    depends_on:
+      - otel-collector
     environment:
       NODE_ENV: production
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_SERVICE_NAME: fastify-https
+      CI_GIT_VERSION: v1.2.3
+      OTEL_METRIC_EXPORT_INTERVAL: 1000
+      OTLP_PASSWORD: unused
       JWT_TRUSTED_ISSUERS: '[{ "iss": "unified-auth", "url": "http://fakeauth/jwks" }]'
       UA_URL: 'http://fakeauth'

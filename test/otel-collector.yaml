@@ -1,0 +1,34 @@
+# Receives OTLP from fastify-https and forwards metrics, logs and traces as OTLP JSON to a sink inside the test
+# container, so tests can assert on what a backend like Loki would receive.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 200ms
+
+exporters:
+  otlphttp/sink:
+    metrics_endpoint: http://fastify-test:4318/v1/metrics
+    logs_endpoint: http://fastify-test:4318/v1/logs
+    traces_endpoint: http://fastify-test:4318/v1/traces
+    encoding: json
+    compression: none
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/sink]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/sink]
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/sink]
