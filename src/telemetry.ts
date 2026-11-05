@@ -1,6 +1,8 @@
 /* eslint-disable no-console -- runs outside any request, so there's no fastify logger to use */
 import { context, logs as apiLogs, metrics as apiMetrics, SeverityNumber, SpanStatusCode, trace, type BatchObservableCallback, type Counter, type Logger, type Meter, type MetricOptions, type Observable, type ObservableCallback, type ObservableResult, type TimeInput } from '@opentelemetry/api'
 import { randomUUID } from 'node:crypto'
+import { constants as perfConstants, PerformanceObserver, type PerformanceEntry } from 'node:perf_hooks'
+import { getHeapSpaceStatistics } from 'node:v8'
 import { promisify } from 'node:util'
 import { gzip } from 'node:zlib'
 import { sleep } from 'txstate-utils'
@@ -409,11 +411,51 @@ export function startTelemetry () {
     // keeps each instance's cumulative series apart, or a backend would merge them into nonsense
     'service.instance.id': randomUUID()
   }
-  if (urls.metrics) every(metricExportInterval(), exportMetrics)
+  if (urls.metrics) {
+    measureRuntime()
+    every(metricExportInterval(), exportMetrics)
+  }
   if (urls.logs) every(LOG_EXPORT_DELAY_MS, async () => { await logQueue.export() })
   if (urls.traces) every(SPAN_EXPORT_DELAY_MS, async () => { await spanQueue.export() })
   process.on('uncaughtException', onUncaughtException)
   console.info(`OpenTelemetry export enabled: ${Object.entries(urls).map(([signal, url]) => `${signal} to ${url}`).join(', ')}`)
+}
+
+const GC_TYPES: Record<number, string> = {
+  [perfConstants.NODE_PERFORMANCE_GC_MINOR]: 'minor',
+  [perfConstants.NODE_PERFORMANCE_GC_MAJOR]: 'major',
+  [perfConstants.NODE_PERFORMANCE_GC_INCREMENTAL]: 'incremental',
+  [perfConstants.NODE_PERFORMANCE_GC_WEAKCB]: 'weakcb'
+}
+
+/** V8 heap, RSS and GC metrics per the v8js and process semconv; heap stats are read only at export */
+function measureRuntime () {
+  const meter = getMeter('fastify-txstate')
+  const heapUsed = meter.createObservableUpDownCounter('v8js.memory.heap.used', { description: 'Heap Memory size allocated.', unit: 'By' })
+  const spaceSize = meter.createObservableUpDownCounter('v8js.memory.heap.space.size', { description: 'Total heap memory size pre-allocated for a heap space.', unit: 'By' })
+  const available = meter.createObservableUpDownCounter('v8js.memory.heap.space.available_size', { description: 'Heap space available size.', unit: 'By' })
+  const physical = meter.createObservableUpDownCounter('v8js.memory.heap.space.physical_size', { description: 'Committed size of a heap space.', unit: 'By' })
+  meter.addBatchObservableCallback(result => {
+    for (const space of getHeapSpaceStatistics()) {
+      const attributes = { 'v8js.heap.space.name': space.space_name }
+      result.observe(heapUsed, space.space_used_size, attributes)
+      result.observe(spaceSize, space.space_size, attributes)
+      result.observe(available, space.space_available_size, attributes)
+      result.observe(physical, space.physical_space_size, attributes)
+    }
+  }, [heapUsed, spaceSize, available, physical])
+  meter.createObservableUpDownCounter('process.memory.usage', { description: 'The amount of physical memory in use.', unit: 'By' })
+    .addCallback(result => { result.observe(process.memoryUsage.rss()) })
+  const gcDuration = meter.createHistogram('v8js.gc.duration', {
+    description: 'Garbage collection duration.',
+    unit: 's',
+    advice: { explicitBucketBoundaries: [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10] }
+  })
+  new PerformanceObserver(list => {
+    for (const entry of list.getEntries()) {
+      gcDuration.record(entry.duration / 1000, { 'v8js.gc.type': GC_TYPES[(entry as PerformanceEntry & { detail: { kind: number } }).detail.kind] ?? '_OTHER' })
+    }
+  }).observe({ entryTypes: ['gc'] })
 }
 
 let crashing = false

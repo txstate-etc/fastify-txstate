@@ -217,6 +217,7 @@ A few opinions drive how it works:
 * Child spans for database queries from mysql2, [oracle-async](https://github.com/txstate-etc/oracle-async), [postgres.js](https://github.com/porsager/postgres) (4.0+), `node:sqlite` (Node 26+) and mongoose (9.7+).
 * A span for each `FileSystemHandler.put`, with the file's size.
 * The `http.server.request.duration` metric, so you get request rates, error rates and latency percentiles per route.
+* V8 heap usage per heap space (`v8js.memory.heap.used` and friends), resident memory (`process.memory.usage`) and garbage collection pauses (`v8js.gc.duration`), so you can spot a memory leak or GC pressure before the pod gets OOM-killed.
 * Every error that ends in a 5xx, sent as a log record attached to its trace.
 * `trace_id` and `span_id` on every log line written during a request, so you can jump from a log line to its trace.
 

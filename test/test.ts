@@ -830,6 +830,7 @@ describe('fastify-txstate', () => {
         && otlpLogs.some(l => l.record.eventName === 'testlib.failed')
         && otlpMetrics.some(m => m.metric.name === 'testserver.duration')
         && otlpMetrics.some(m => m.metric.name === 'testserver.cardinality')
+        && ['v8js.memory.heap.used', 'process.memory.usage'].every(name => otlpMetrics.some(m => m.metric.name === name))
         && !!durationPoint('/test')
         && spansFor('9bf92f3577b34da6a3ce929d0e0e4736').length >= 1
         && spansFor('4bf92f3577b34da6a3ce929d0e0e4736').length >= 3
@@ -891,6 +892,18 @@ describe('fastify-txstate', () => {
       expect(log!.scope).to.deep.equal({ name: 'testlib', version: '0.1.0' })
       expect(log!.record).to.include({ severityNumber: 17 })
       expect(log!.attributes).to.include({ 'testlib.step': 'parse', 'exception.type': 'TypeError', 'exception.message': 'bad input' })
+    })
+
+    it('should export V8 heap and process memory metrics automatically', () => {
+      const metric = (name: string) => otlpMetrics.findLast(m => m.metric.name === name)
+      const heap = metric('v8js.memory.heap.used')
+      expect(heap?.scope.name).to.equal('fastify-txstate')
+      expect(heap?.metric.unit).to.equal('By')
+      expect(heap?.metric.sum?.isMonotonic).to.not.be.ok
+      const spaces = heap!.metric.sum!.dataPoints.map(p => otlpAttributes(p.attributes)['v8js.heap.space.name'])
+      expect(spaces).to.include.members(['new_space', 'old_space'])
+      for (const name of ['v8js.memory.heap.space.size', 'v8js.memory.heap.space.available_size', 'v8js.memory.heap.space.physical_size']) expect(metric(name), name).to.exist
+      expect(metric('process.memory.usage')?.metric.sum?.dataPoints[0].asDouble).to.be.greaterThan(0)
     })
 
     it('should export an app\'s own metrics and logs under its own scope', () => {
