@@ -830,7 +830,7 @@ describe('fastify-txstate', () => {
         && otlpLogs.some(l => l.record.eventName === 'testlib.failed')
         && otlpMetrics.some(m => m.metric.name === 'testserver.duration')
         && otlpMetrics.some(m => m.metric.name === 'testserver.cardinality')
-        && ['v8js.memory.heap.used', 'process.memory.usage'].every(name => otlpMetrics.some(m => m.metric.name === name))
+        && ['v8js.memory.heap.used', 'process.memory.usage', 'nodejs.eventloop.delay.p99', 'nodejs.eventloop.utilization', 'nodejs.eventloop.time', 'http.server.active_requests'].every(name => otlpMetrics.some(m => m.metric.name === name))
         && !!durationPoint('/test')
         && spansFor('9bf92f3577b34da6a3ce929d0e0e4736').length >= 1
         && spansFor('4bf92f3577b34da6a3ce929d0e0e4736').length >= 3
@@ -904,6 +904,28 @@ describe('fastify-txstate', () => {
       expect(spaces).to.include.members(['new_space', 'old_space'])
       for (const name of ['v8js.memory.heap.space.size', 'v8js.memory.heap.space.available_size', 'v8js.memory.heap.space.physical_size']) expect(metric(name), name).to.exist
       expect(metric('process.memory.usage')?.metric.sum?.dataPoints[0].asDouble).to.be.greaterThan(0)
+    })
+
+    it('should export event loop metrics automatically', () => {
+      const metric = (name: string) => otlpMetrics.findLast(m => m.metric.name === name)
+      for (const stat of ['min', 'max', 'mean', 'stddev', 'p50', 'p90', 'p99']) {
+        const gauge = metric(`nodejs.eventloop.delay.${stat}`)
+        expect(gauge?.metric.unit, stat).to.equal('s')
+        expect(gauge?.metric.gauge?.dataPoints[0].asDouble, stat).to.be.at.least(0).and.below(10)
+      }
+      const utilization = metric('nodejs.eventloop.utilization')?.metric.gauge?.dataPoints[0].asDouble
+      expect(utilization).to.be.at.least(0).and.at.most(1)
+      const time = metric('nodejs.eventloop.time')
+      expect(time?.metric.sum?.isMonotonic).to.be.true
+      expect(time!.metric.sum!.dataPoints.map(p => otlpAttributes(p.attributes)['nodejs.eventloop.state'])).to.have.members(['active', 'idle'])
+    })
+
+    it('should count active requests back down to zero when they finish', () => {
+      const active = otlpMetrics.findLast(m => m.metric.name === 'http.server.active_requests')
+      expect(active?.metric.sum?.isMonotonic).to.not.be.ok
+      const get = active!.metric.sum!.dataPoints.find(p => otlpAttributes(p.attributes)['http.request.method'] === 'GET')
+      expect(otlpAttributes(get?.attributes)).to.deep.equal({ 'http.request.method': 'GET', 'url.scheme': 'https' })
+      expect(get?.asDouble ?? 0).to.equal(0)
     })
 
     it('should export an app\'s own metrics and logs under its own scope', () => {

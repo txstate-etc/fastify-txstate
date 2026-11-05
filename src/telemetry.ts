@@ -1,7 +1,7 @@
 /* eslint-disable no-console -- runs outside any request, so there's no fastify logger to use */
 import { context, logs as apiLogs, metrics as apiMetrics, SeverityNumber, SpanStatusCode, trace, type BatchObservableCallback, type Counter, type Logger, type Meter, type MetricOptions, type Observable, type ObservableCallback, type ObservableResult, type TimeInput } from '@opentelemetry/api'
 import { randomUUID } from 'node:crypto'
-import { constants as perfConstants, PerformanceObserver, type PerformanceEntry } from 'node:perf_hooks'
+import { constants as perfConstants, monitorEventLoopDelay, performance, PerformanceObserver, type PerformanceEntry } from 'node:perf_hooks'
 import { getHeapSpaceStatistics } from 'node:v8'
 import { promisify } from 'node:util'
 import { gzip } from 'node:zlib'
@@ -428,7 +428,7 @@ const GC_TYPES: Record<number, string> = {
   [perfConstants.NODE_PERFORMANCE_GC_WEAKCB]: 'weakcb'
 }
 
-/** V8 heap, RSS and GC metrics per the v8js and process semconv; heap stats are read only at export */
+/** V8 heap, RSS, GC and event loop metrics per the v8js, nodejs and process semconv; all but GC are read only at export */
 function measureRuntime () {
   const meter = getMeter('fastify-txstate')
   const heapUsed = meter.createObservableUpDownCounter('v8js.memory.heap.used', { description: 'Heap Memory size allocated.', unit: 'By' })
@@ -451,6 +451,32 @@ function measureRuntime () {
     unit: 's',
     advice: { explicitBucketBoundaries: [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10] }
   })
+  const delay = monitorEventLoopDelay()
+  delay.enable()
+  const delayGauges = (['min', 'max', 'mean', 'stddev', 'p50', 'p90', 'p99'] as const).map(stat => [stat, meter.createObservableGauge(`nodejs.eventloop.delay.${stat}`, { description: `Event loop ${{ min: 'minimum', max: 'maximum', mean: 'mean', stddev: 'standard deviation', p50: '50 percentile', p90: '90 percentile', p99: '99 percentile' }[stat]} delay.`, unit: 's' })] as const)
+  meter.addBatchObservableCallback(result => {
+    // reset each export, so the values describe the last interval
+    if (delay.count) {
+      for (const [stat, gauge] of delayGauges) {
+        const ns = stat.startsWith('p') ? delay.percentile(Number(stat.slice(1))) : delay[stat as 'min' | 'max' | 'mean' | 'stddev']
+        result.observe(gauge, ns / 1e9)
+      }
+    }
+    delay.reset()
+  }, delayGauges.map(([, gauge]) => gauge))
+  let lastElu = performance.eventLoopUtilization()
+  meter.createObservableGauge('nodejs.eventloop.utilization', { description: 'Event loop utilization.', unit: '1' })
+    .addCallback(result => {
+      const elu = performance.eventLoopUtilization()
+      result.observe(performance.eventLoopUtilization(elu, lastElu).utilization)
+      lastElu = elu
+    })
+  meter.createObservableCounter('nodejs.eventloop.time', { description: 'Cumulative duration of time the event loop has been in each state.', unit: 's' })
+    .addCallback(result => {
+      const { active, idle } = performance.eventLoopUtilization()
+      result.observe(active / 1000, { 'nodejs.eventloop.state': 'active' })
+      result.observe(idle / 1000, { 'nodejs.eventloop.state': 'idle' })
+    })
   new PerformanceObserver(list => {
     for (const entry of list.getEntries()) {
       gcDuration.record(entry.duration / 1000, { 'v8js.gc.type': GC_TYPES[(entry as PerformanceEntry & { detail: { kind: number } }).detail.kind] ?? '_OTHER' })

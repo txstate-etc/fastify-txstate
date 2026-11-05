@@ -700,7 +700,7 @@ export async function traceJob<T> (name: string, task: () => T | Promise<T>, att
   })
 }
 
-/** http.server.request.duration, per the HTTP semantic conventions, when metrics are enabled; Server calls this too */
+/** http.server.request.duration and http.server.active_requests, per the HTTP semantic conventions, when metrics are enabled; Server calls this too */
 export function measureRequests (app: FastifyInstance) {
   if (!telemetryEnabled('metrics')) return
   const duration = metrics.getMeter('fastify-txstate').createHistogram('http.server.request.duration', {
@@ -708,7 +708,33 @@ export function measureRequests (app: FastifyInstance) {
     unit: 's',
     advice: { explicitBucketBoundaries: [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10] }
   })
+  const active = metrics.getMeter('fastify-txstate').createUpDownCounter('http.server.active_requests', {
+    description: 'Number of active HTTP server requests.',
+    unit: '{request}'
+  })
+  const activeAttributes = new WeakMap<FastifyRequest, Attributes>()
+  app.addHook('onRequest', (req, res, done) => {
+    const route = req.routeOptions.url
+    if (!route || !untracedRoutes.has(route)) {
+      const attributes = { 'http.request.method': methodAttributes(req.method).attributes['http.request.method'], 'url.scheme': req.protocol }
+      activeAttributes.set(req, attributes)
+      active.add(1, attributes)
+    }
+    done()
+  })
+  // an aborted request can reach both hooks, so only the first one counts it done
+  const finished = (req: FastifyRequest) => {
+    const attributes = activeAttributes.get(req)
+    if (!attributes) return
+    activeAttributes.delete(req)
+    active.add(-1, attributes)
+  }
+  app.addHook('onRequestAbort', (req, done) => {
+    finished(req)
+    done()
+  })
   app.addHook('onResponse', (req, res, done) => {
+    finished(req)
     const route = req.routeOptions.url
     if (!route || !untracedRoutes.has(route)) {
       // elapsedTime runs from onRequest, in milliseconds
