@@ -850,6 +850,7 @@ describe('fastify-txstate', () => {
         && spansFor('cbf92f3577b34da6a3ce929d0e0e4736').length >= 1
         && spansFor('dbf92f3577b34da6a3ce929d0e0e4736').length >= 1
         && otlpSpans.some(s => s.span.name === 'testserver.cleanup')
+        && otlpMetrics.some(m => m.metric.name === 'job.duration')
         && otlpLogs.some(l => l.record.eventName === 'http.server.request.exception')
         && otlpLogs.some(l => l.attributes['exception.message'] === 'could not reach the mail server')
         && otlpLogs.some(l => l.attributes['exception.message'] === 'cleanup failed')
@@ -1260,6 +1261,11 @@ describe('fastify-txstate', () => {
       expect(log, 'exception log never reached the collector').to.exist
       expect(log!.record).to.include({ eventName: 'exception', traceId: job!.span.traceId, spanId: job!.span.spanId })
       expect(log!.attributes).to.include({ 'testserver.job': 'cleanup' })
+      // by name and outcome only; the job's own attributes stay off the metric
+      const point = otlpMetrics.findLast(m => m.metric.name === 'job.duration')?.metric.histogram?.dataPoints.find(p => otlpAttributes(p.attributes)['job.name'] === 'testserver.cleanup')
+      expect(point, 'job.duration never reached the collector').to.exist
+      expect(otlpAttributes(point!.attributes)).to.deep.equal({ 'job.name': 'testserver.cleanup', 'error.type': 'Error' })
+      expect(point!.count).to.equal('1')
     })
 
     it('should not trace an unsampled request, or the analytics route', () => {

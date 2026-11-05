@@ -726,26 +726,40 @@ export function recordRequestErrors (app: FastifyInstance) {
   })
 }
 
+let jobDuration: Histogram | undefined
+
 /**
  * Runs a background task, like a cron job, as the root span of its own trace, so its outgoing
  * calls and queries are traced too. A failure is sent as an exception log record and marks the
- * span failed, then rethrown, so the caller's catch only needs to protect the scheduler.
+ * span failed, then rethrown, so the caller's catch only needs to protect the scheduler. Each run
+ * is recorded in the job.duration histogram by name, so name is a metric attribute and must not
+ * vary per run; attributes go on the span and log record only.
  */
 export async function traceJob<T> (name: string, task: () => T | Promise<T>, attributes?: Attributes): Promise<T> {
   startTelemetry()
   if (telemetryEnabled('traces')) instrument()
   measureDatabases()
+  jobDuration ??= metrics.getMeter('fastify-txstate').createHistogram('job.duration', {
+    description: 'Duration of background jobs run with traceJob.',
+    unit: 's',
+    advice: { explicitBucketBoundaries: [0.1, 0.5, 1, 5, 10, 30, 60, 300, 900, 1800, 3600] }
+  })
+  const duration = jobDuration
+  const start = performance.now()
   const span = telemetryEnabled('traces') ? new Span(name, SpanKind.INTERNAL, { ...attributes }) : undefined
   return await context.with(span ? apiTrace.setSpan(ROOT_CONTEXT, span) : ROOT_CONTEXT, async () => {
+    let errorType: string | undefined
     try {
       return await task()
     } catch (e: unknown) {
-      span?.setError(exceptionAttributes(e)['exception.type'] as string | undefined ?? '_OTHER')
+      errorType = exceptionAttributes(e)['exception.type'] as string | undefined ?? '_OTHER'
+      span?.setError(errorType)
       span?.recordException(e)
       emitException(e, 'exception', attributes)
       throw e
     } finally {
       span?.end()
+      duration.record((performance.now() - start) / 1000, { 'job.name': name, 'error.type': errorType })
     }
   })
 }

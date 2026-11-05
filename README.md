@@ -217,6 +217,7 @@ A few opinions drive how it works:
 * Child spans for database queries from mysql2, [oracle-async](https://github.com/txstate-etc/oracle-async), [postgres.js](https://github.com/porsager/postgres) (4.0+), `node:sqlite` (Node 26+) and mongoose (9.7+).
 * A span for each `FileSystemHandler.put`, with the file's size.
 * The `http.server.request.duration` and `http.server.active_requests` metrics, so you get request rates, error rates and latency percentiles per route, plus how many requests are in flight.
+* The `db.client.operation.duration` metric, by database and server rather than by query, since every distinct query would be a series of its own. Traces tell you which query was slow. Unlike the spans, it counts every query, even ones run outside a request.
 * V8 heap usage per heap space (`v8js.memory.heap.used` and friends), resident memory (`process.memory.usage`) and garbage collection pauses (`v8js.gc.duration`), so you can spot a memory leak or GC pressure before the pod gets OOM-killed.
 * Event loop delay (`nodejs.eventloop.delay.p99` and friends) and utilization (`nodejs.eventloop.utilization`). Delay tells you when something is blocking the thread and making every request wait; utilization near 1 means the process is saturated even if CPU looks low.
 * Every error that ends in a 5xx, sent as a log record attached to its trace.
@@ -260,6 +261,8 @@ setInterval(() => {
 ```
 
 If the job throws, the error is sent as a log record, the span is marked failed, and then the error is rethrown. You still need the `catch`, but only to keep the rejection from crashing your process. There's no need to log it again.
+
+Every run is also recorded in the `job.duration` metric by job name, with `error.type` set when it failed, so you can alert on a job that has stopped succeeding without digging through traces. That makes the name a metric attribute, so keep it fixed, like `sync-overdue-books`, and put ids and other per-run details in the attributes argument, which only goes on the span and the log record.
 
 ## Recording Your Own Telemetry
 We export `metrics`, `logs` and `trace`, which work exactly like the same names from `@opentelemetry/api`, so the upstream documentation applies. In fact we register ourselves with `@opentelemetry/api`, so you (and any library you use) can import from there instead and it all ends up in the same place.
