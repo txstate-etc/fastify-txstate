@@ -693,7 +693,7 @@ export function exceptionAttributes (exception: unknown): Attributes {
 
 const exceptionLogger = getLogger('fastify-txstate')
 
-/** an unhandled exception as a log record, per the semconv; tracing.ts and reportError are the callers */
+/** an unhandled exception as a log record, per the semconv; tracing.ts and recordError are the callers */
 export function emitException (exception: unknown, eventName: string, attributes?: Attributes) {
   const exceptionAttrs = exceptionAttributes(exception)
   // the semconv leaves body unset, but log viewers show it as the line
@@ -701,12 +701,12 @@ export function emitException (exception: unknown, eventName: string, attributes
 }
 
 /**
- * Reports an error the app caught itself, like a failed cron task: it goes to the console, out as
- * an OTLP `exception` log record, and onto the active span, if any, which is marked failed.
- * Errors that make a request fail with a 5xx are reported automatically.
+ * Records an error the app caught itself, like a failed cron task: it goes out as an OTLP
+ * `exception` log record and onto the active span, if any, which is marked failed. It does not
+ * log to the console; use your own logger for that. Errors that make a request fail with a 5xx
+ * are recorded automatically.
  */
-export function reportError (exception: unknown, attributes?: Attributes) {
-  console.error(exception)
+export function recordError (exception: unknown, attributes?: Attributes) {
   emitException(exception, 'exception', attributes)
   const span = trace.getActiveSpan()
   if (!span) return

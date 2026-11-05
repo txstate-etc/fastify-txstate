@@ -15,7 +15,7 @@
   - `logs.getLogger(name)` for structured log records, stamped with the current trace.
   - `trace.getTracer(name)` for spans of your own, like one around an LLM call with its token counts.
   - `traceJob(name, task)` runs a background task, like a cron job, as its own trace. Without it, a job's outgoing calls and queries go untraced. A failure is reported and then rethrown.
-  - `reportError(error)` for errors you catch yourself but want someone to see. Errors that turn into a 5xx are already reported.
+  - `recordError(error)` for errors you catch yourself but want someone to see. It records telemetry only, so log the error as usual too. Errors that turn into a 5xx are already recorded.
 - `analyticsPlugin` sends interaction events as OTLP log records when logs export is enabled, and now flushes its queue when the server closes instead of losing the last few seconds of events on every deploy.
 
 ### Notes

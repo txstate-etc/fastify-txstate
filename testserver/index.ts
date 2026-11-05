@@ -8,7 +8,7 @@ import { access, mkdir, utimes, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { PassThrough, Readable } from 'node:stream'
 import { isBlank, randomid, rescue, sleep } from 'txstate-utils'
-import Server, { FileSystemHandler, HttpError, SeverityNumber, SpanKind, analyticsPlugin, fileHandler, formDataFieldsFromParts, formDataFilesFromParts, jwtAuthenticate, logs, metrics, postFormData, registerUaCookieRoutes, reportError, requireCookieAuthUa, trace, traceJob } from '../src/index.ts'
+import Server, { FileSystemHandler, HttpError, SeverityNumber, SpanKind, analyticsPlugin, fileHandler, formDataFieldsFromParts, formDataFilesFromParts, jwtAuthenticate, logs, metrics, postFormData, registerUaCookieRoutes, recordError, requireCookieAuthUa, trace, traceJob } from '../src/index.ts'
 
 class CustomError extends Error {}
 
@@ -197,9 +197,9 @@ server.swagger().then(async () => {
     logger.emit({ eventName: 'testserver.hit', severityNumber: SeverityNumber.WARN, severityText: 'WARN', body: 'hit the telemetry route', attributes: { 'testserver.kind': 'test' } })
     return {}
   })
-  // an app catching its own error and reporting it
+  // an app catching its own error and recording it
   server.app.get('/telemetry/report', async (req, res) => {
-    reportError(new CustomError('could not reach the mail server'), { 'testserver.kind': 'test' })
+    recordError(new CustomError('could not reach the mail server'), { 'testserver.kind': 'test' })
     return {}
   })
   // what a cron task looks like, run here so the test can trigger it

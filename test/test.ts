@@ -1188,7 +1188,7 @@ describe('fastify-txstate', () => {
       expect(otlpLogs.filter(l => l.record.traceId === traceId)).to.be.empty
     })
 
-    it('should export an error the app reported itself, and fail the active span', () => {
+    it('should export an error the app recorded itself, and fail the active span', () => {
       const traceId = 'dbf92f3577b34da6a3ce929d0e0e4736'
       const server = spansFor(traceId).find(s => s.span.kind === 2)
       const log = otlpLogs.find(l => l.attributes['exception.message'] === 'could not reach the mail server')

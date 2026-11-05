@@ -296,7 +296,7 @@ Each metric keeps at most 2000 different combinations of attribute values. Past 
 
 ### Logs and Errors
 ```javascript
-import { logs, SeverityNumber, reportError } from 'fastify-txstate'
+import { logs, SeverityNumber, recordError } from 'fastify-txstate'
 
 // structured log records, stamped with the current trace
 const logger = logs.getLogger('my-app')
@@ -306,11 +306,12 @@ logger.emit({ eventName: 'library.hold.expired', severityNumber: SeverityNumber.
 try {
   await refreshCatalog()
 } catch (e) {
-  reportError(e) // goes to the console, out as a log record, and marks the active span failed
+  console.error(e) // or your own logger
+  recordError(e) // out as a log record, and marks the active span failed
 }
 ```
 
-Errors that end in a 5xx are already reported, so `reportError` is only for the ones you catch.
+Errors that end in a 5xx are already recorded, so `recordError` is only for the ones you catch. It doesn't log to the console, so keep logging the error the way you normally would.
 
 ### Spans
 You'll rarely need a span of your own, since requests, outgoing calls and queries already get one. If you just want more detail on the request's span, add attributes to it:
