@@ -5,6 +5,9 @@ import { dirname } from 'node:path'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { rescue, randomid } from 'txstate-utils'
+import { SpanStatusCode, trace } from './tracing.ts'
+
+const tracer = trace.getTracer('fastify-txstate')
 
 function isENOENT (e: unknown) {
   return (e as NodeJS.ErrnoException).code === 'ENOENT'
@@ -164,6 +167,27 @@ export class FileSystemHandler implements FileHandler {
   }
 
   async put (stream: Readable) {
+    // like our other spans, only made inside a request or job
+    if (!trace.getActiveSpan()) return await this.#put(stream)
+    return await tracer.startActiveSpan('FileSystemHandler.put', async span => {
+      try {
+        const result = await this.#put(stream)
+        span.setAttributes({ 'file.size': result.size })
+        return result
+      } catch (e: unknown) {
+        const error = e as Error & { code?: string }
+        span.setStatus({ code: SpanStatusCode.ERROR })
+        span.setAttribute('error.type', error.code ?? error.constructor.name)
+        span.recordException(error)
+        throw e
+      } finally {
+        span.end()
+      }
+    })
+  }
+
+  // when the stream is an upload, most of the time goes to receiving it
+  async #put (stream: Readable) {
     const tmp = this.#getTmpLocation()
     const hash = createHash('sha256')
     let size = 0

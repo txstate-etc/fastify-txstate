@@ -811,6 +811,9 @@ describe('fastify-txstate', () => {
       await httpsClient.get('/telemetry/cardinality')
       await httpsClient.get('/tracing/db', { headers: { traceparent: '00-7bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' } })
       await httpsClient.get('/tracing/postgres', { headers: { traceparent: '00-2bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' } })
+      const upload = new FormData()
+      upload.append('file', new Blob(['traced upload']), 'traced.txt')
+      await httpsClient.post('/filestorage/upload', upload, { headers: { traceparent: '00-0cf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' } })
       await httpsClient.get('/tracing/sqlite', { headers: { traceparent: '00-1bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' } })
       await httpsClient.get('/tracing/mongo', { headers: { traceparent: '00-fbf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' } })
       await httpsClient.get('/500', { headers: { traceparent: '00-5bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' }, validateStatus: () => true })
@@ -836,6 +839,7 @@ describe('fastify-txstate', () => {
         && spansFor('fbf92f3577b34da6a3ce929d0e0e4736').length >= 3
         && spansFor('2bf92f3577b34da6a3ce929d0e0e4736').length >= 4
         && spansFor('1bf92f3577b34da6a3ce929d0e0e4736').length >= 2
+        && spansFor('0cf92f3577b34da6a3ce929d0e0e4736').length >= 2
         && spansFor('5bf92f3577b34da6a3ce929d0e0e4736').length >= 1
         && spansFor('cbf92f3577b34da6a3ce929d0e0e4736').length >= 1
         && spansFor('dbf92f3577b34da6a3ce929d0e0e4736').length >= 1
@@ -1077,6 +1081,15 @@ describe('fastify-txstate', () => {
       })
       const ms = Number(BigInt(db!.span.endTimeUnixNano) - BigInt(db!.span.startTimeUnixNano)) / 1e6
       expect(ms).to.be.closeTo(5, 0.5)
+    })
+
+    it('should trace FileSystemHandler.put inside a request', () => {
+      const spans = spansFor('0cf92f3577b34da6a3ce929d0e0e4736')
+      const server = spans.find(s => s.span.kind === 2)
+      const put = spans.find(s => s.span.name === 'FileSystemHandler.put')
+      expect(put, 'put span never reached the collector').to.exist
+      expect(put!.span.parentSpanId).to.equal(server?.span.spanId)
+      expect(put!.attributes['file.size']).to.equal('13')
     })
 
     it('should trace mongoose operations from their diagnostics channels, without filters', () => {

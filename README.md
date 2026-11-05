@@ -215,6 +215,7 @@ A few opinions drive how it works:
 * A span for every request, continuing the caller's trace if it sent a `traceparent` header. `/health` and `/analytics` are left out, because probes and beacons would bury the real traffic. Add your own with `untracedRoutes.add('/metrics')`.
 * Child spans for outgoing `fetch` and `node:http` calls, which also send a `traceparent` so the next service joins the same trace.
 * Child spans for database queries from mysql2, [oracle-async](https://github.com/txstate-etc/oracle-async), [postgres.js](https://github.com/porsager/postgres) (4.0+), `node:sqlite` (Node 26+) and mongoose (9.7+).
+* A span for each `FileSystemHandler.put`, with the file's size.
 * The `http.server.request.duration` metric, so you get request rates, error rates and latency percentiles per route.
 * Every error that ends in a 5xx, sent as a log record attached to its trace.
 * `trace_id` and `span_id` on every log line written during a request, so you can jump from a log line to its trace.
