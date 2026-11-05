@@ -6,7 +6,7 @@
 
 - Built-in OpenTelemetry export of metrics, logs and traces, with no SDK to install. Set `OTEL_EXPORTER_OTLP_ENDPOINT` and `Server` starts sending to it. Leave it unset and everything below is a no-op, so instrumentation can stay in your code everywhere.
 - What you get automatically:
-  - **Traces**: a span for every request (except `/health` and `/analytics`), continuing the caller's `traceparent`, with child spans for outgoing `fetch`/`node:http` calls, mysql2/oracle-async queries and mongoose (9.7+) operations. Outgoing requests carry a `traceparent` so the next service joins the same trace.
+  - **Traces**: a span for every request (except `/health` and `/analytics`), continuing the caller's `traceparent`, with child spans for outgoing `fetch`/`node:http` calls, mysql2, oracle-async, postgres.js (4.0+) and `node:sqlite` (Node 26+) queries, and mongoose (9.7+) operations. Outgoing requests carry a `traceparent` so the next service joins the same trace.
   - **Metrics**: `http.server.request.duration`, per the HTTP semantic conventions.
   - **Logs**: every error that ends in a 5xx, as an `http.server.request.exception` log record tied to its trace.
   - Every request's log lines get `trace_id` and `span_id`.
@@ -29,7 +29,7 @@
 - `OTLP_PASSWORD` sends basic auth with the service name as the username. `NODE_ENV` becomes `deployment.environment.name` and `CI_GIT_VERSION` becomes `service.version`, unless `OTEL_RESOURCE_ATTRIBUTES` sets them.
 - A failed export is retried for up to 10 seconds, then dropped, and only the first failure in a streak is logged. Metrics recover on the next export, but a dropped log or span batch is gone.
 - Each metric keeps at most 2000 attribute sets; past that, new ones are lumped under `otel.metric.overflow` with a warning, which almost always means an id or full URL ended up in an attribute.
-- `token` and `unifiedJwt` query parameters are redacted from recorded URLs, mysql2 query text has its literals replaced with `?`, and mongoose filters and documents are never recorded.
+- `token` and `unifiedJwt` query parameters are redacted from recorded URLs, mysql2 `query()` and `node:sqlite` text has its literals replaced with `?`, and mongoose filters and documents are never recorded.
 - `startTelemetry()`, `telemetryEnabled(signal)` and `flushTelemetry()` are exported for using any of this outside `Server`, e.g. in a standalone worker script. `OtlpAnalyticsClient` is exported too.
 
 ## 4.3.4

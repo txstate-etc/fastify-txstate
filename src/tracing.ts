@@ -221,7 +221,11 @@ const tracerProvider: TracerProvider = {
 }
 
 /** like @opentelemetry/api's trace: name the tracer after your app or library */
-export const trace = { getTracer: (name: string, version?: string): ApiTracer => tracerProvider.getTracer(name, version) }
+export const trace = {
+  getTracer: (name: string, version?: string): ApiTracer => tracerProvider.getTracer(name, version),
+  /** the current request's or job's span, to add attributes to */
+  getActiveSpan: (): ApiSpan | undefined => apiTrace.getActiveSpan()
+}
 
 /** the SDK's AsyncLocalStorageContextManager, except that bind() only wraps functions, not EventEmitters */
 class AsyncLocalStorageContextManager implements ContextManager {

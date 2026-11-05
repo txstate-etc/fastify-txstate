@@ -187,6 +187,156 @@ If you want to provide your own logger, you can pass a pino instance via the `lo
 
 You can also simply add information to the `reply.extraLogInfo` object and it will automatically appear in the outgoing access log in production.
 
+# OpenTelemetry
+Set `OTEL_EXPORTER_OTLP_ENDPOINT` and the server starts sending traces, metrics and logs to it. There's no SDK to install and nothing to register. Leave it unset and everything in this section quietly does nothing, so instrumentation can stay in your code everywhere and only costs anything in environments that have a collector.
+
+A few opinions drive how it works:
+* Configure it with the same `OTEL_` environment variables the official SDK reads, so its documentation still applies.
+* Never patch anyone's code. A library that publishes [diagnostics channels](https://nodejs.org/api/diagnostics_channel.html) gets traced, and one that doesn't, doesn't (see the note about Postgres below).
+* Only trace work that belongs to something. A query that runs outside any request or job does not become its own one-span trace cluttering up your backend.
+
+## Environment Variables
+| Variable | Description |
+|----------|-------------|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Where to send everything, e.g. `https://otel.example.edu`. We append `/v1/traces` etc. |
+| `OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_ENDPOINT` | Override the endpoint for one signal. This one is used as-is, with nothing appended. |
+| `OTLP_PASSWORD` | Sends basic auth, with the service name as the username. Ours, not the SDK's. |
+| `OTEL_EXPORTER_OTLP_HEADERS` | Extra headers as `key=value,key=value`, plus per-signal `_HEADERS` variants. An `Authorization` header here wins over `OTLP_PASSWORD`. |
+| `OTEL_SERVICE_NAME` | Your app's name in the backend. Please set it, otherwise you're `unknown_service:node`. |
+| `OTEL_RESOURCE_ATTRIBUTES` | Extra `key=value,key=value` attributes on everything you send. |
+| `OTEL_{TRACES,METRICS,LOGS}_EXPORTER` | `none` turns off one signal. |
+| `OTEL_METRIC_EXPORT_INTERVAL` | Milliseconds between metric exports. Defaults to 60000. |
+| `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | The SDK's samplers, except the remote ones. The default records every trace unless the caller's `traceparent` says it wasn't sampled. |
+| `OTEL_SDK_DISABLED` | `true` turns everything off, even with an endpoint set. |
+
+`NODE_ENV` becomes `deployment.environment.name` and `CI_GIT_VERSION` becomes `service.version`, unless `OTEL_RESOURCE_ATTRIBUTES` sets them.
+
+## What You Get Automatically
+* A span for every request, continuing the caller's trace if it sent a `traceparent` header. `/health` and `/analytics` are left out, because probes and beacons would bury the real traffic. Add your own with `untracedRoutes.add('/metrics')`.
+* Child spans for outgoing `fetch` and `node:http` calls, which also send a `traceparent` so the next service joins the same trace.
+* Child spans for database queries from mysql2, [oracle-async](https://github.com/txstate-etc/oracle-async), [postgres.js](https://github.com/porsager/postgres) (4.0+), `node:sqlite` (Node 26+) and mongoose (9.7+).
+* The `http.server.request.duration` metric, so you get request rates, error rates and latency percentiles per route.
+* Every error that ends in a 5xx, sent as a log record attached to its trace.
+* `trace_id` and `span_id` on every log line written during a request, so you can jump from a log line to its trace.
+
+### Note about what ends up in your traces
+Query text is recorded, but bind values aren't. mysql2's `query()` and `node:sqlite` put the values directly into the SQL text before we see it, so we replace every literal with `?`. That's why `execute()` is preferable to `query()` in mysql2 if you want readable spans. mongoose filters and documents are never recorded. `token` and `unifiedJwt` query parameters are redacted from recorded URLs.
+
+Sometimes you really do need a bind value, say to find the one slow book among thousands of identical `SELECT * FROM books WHERE id = ?` spans. oracle-async lets you opt in per query with `traceBinds`; see its README.
+
+SQLite spans have two weaknesses. `node:sqlite` only reports a statement after it succeeds, so failed statements get no span at all. It also only reports durations to the millisecond, so most of your SQLite spans will say 0ms.
+
+### Note about Postgres
+Use [postgres.js](https://github.com/porsager/postgres) rather than `pg` (node-postgres). postgres.js publishes diagnostics channels, so its queries are traced automatically. `pg` doesn't, so it needs to be patched by [`@opentelemetry/instrumentation-pg`](https://www.npmjs.com/package/@opentelemetry/instrumentation-pg). If something forces `pg` on you:
+
+```bash
+npm install @opentelemetry/instrumentation @opentelemetry/instrumentation-pg
+```
+
+```javascript
+// instrumentation.js
+import { registerInstrumentations } from '@opentelemetry/instrumentation'
+import { PgInstrumentation } from '@opentelemetry/instrumentation-pg'
+registerInstrumentations({ instrumentations: [new PgInstrumentation({ requireParentSpan: true })] })
+```
+
+Start with `node --import ./instrumentation.js index.js`. It has to load before anything imports `pg`, so registering it inside `index.js` won't work.
+
+## Background Jobs
+A cron job or queue worker doesn't run inside a request, so by our "only trace work that belongs to something" rule, its queries and outgoing calls aren't traced. Wrap it in `traceJob` and it gets a trace of its own:
+
+```javascript
+import { traceJob } from 'fastify-txstate'
+
+setInterval(() => {
+  traceJob('sync-overdue-books', async () => {
+    const books = await db.getall('SELECT * FROM books WHERE due < NOW()') // traced
+    await fetch('https://notify.example.edu', { method: 'POST', body: JSON.stringify(books) }) // traced
+  }).catch(() => { /* already reported */ })
+}, 60_000)
+```
+
+If the job throws, the error is sent as a log record, the span is marked failed, and then the error is rethrown. You still need the `catch`, but only to keep the rejection from crashing your process. There's no need to log it again.
+
+## Recording Your Own Telemetry
+We export `metrics`, `logs` and `trace`, which work exactly like the same names from `@opentelemetry/api`, so the upstream documentation applies. In fact we register ourselves with `@opentelemetry/api`, so you (and any library you use) can import from there instead and it all ends up in the same place.
+
+If something else, like the official SDK, registers with `@opentelemetry/api` before we do, it wins and we print a warning. Our automatic request and database spans still go out through our exporter, but anything recorded through the API goes to the other SDK.
+
+### Metrics
+Most of what you'll add is metrics: counters for things that happen, gauges for levels you can look at, and the occasional histogram.
+
+```javascript
+import { metrics } from 'fastify-txstate'
+const meter = metrics.getMeter('my-app')
+
+// a counter, for things that happen
+const checkouts = meter.createCounter('library.checkouts')
+checkouts.add(1, { 'library.branch': 'alkek' })
+
+// a gauge you set whenever you happen to learn the value
+const shelfSpace = meter.createGauge('library.shelf.free', { unit: 'm' })
+shelfSpace.record(12.5, { 'library.branch': 'alkek' })
+
+// an observable gauge, when it's easier to go look; the callback runs once per export
+meter.createObservableGauge('library.holds.waiting').addCallback(async result => {
+  result.observe(await countWaitingHolds())
+})
+
+// a histogram, when you care about the distribution, like how long something took
+const importDuration = meter.createHistogram('library.import.duration', { unit: 's' })
+importDuration.record(seconds)
+```
+
+### Note about metric attributes
+Each metric keeps at most 2000 different combinations of attribute values. Past that, new combinations are lumped together under `otel.metric.overflow` and we print a warning. If you ever see that warning, you almost certainly put something unbounded in an attribute, like a book id or a full URL, and every value is becoming its own time series. Put things like that on spans instead, where they're free.
+
+### Logs and Errors
+```javascript
+import { logs, SeverityNumber, reportError } from 'fastify-txstate'
+
+// structured log records, stamped with the current trace
+const logger = logs.getLogger('my-app')
+logger.emit({ eventName: 'library.hold.expired', severityNumber: SeverityNumber.INFO, attributes: { 'library.book.id': book.id } })
+
+// an error you caught and handled, but someone should still know about
+try {
+  await refreshCatalog()
+} catch (e) {
+  reportError(e) // goes to the console, out as a log record, and marks the active span failed
+}
+```
+
+Errors that end in a 5xx are already reported, so `reportError` is only for the ones you catch.
+
+### Spans
+You'll rarely need a span of your own, since requests, outgoing calls and queries already get one. If you just want more detail on the request's span, add attributes to it:
+
+```javascript
+import { trace } from 'fastify-txstate'
+trace.getActiveSpan()?.setAttributes({ 'library.book.id': book.id })
+```
+
+Make a new span when a chunk of work deserves its own bar in the trace, like generating a big PDF:
+
+```javascript
+const tracer = trace.getTracer('my-app')
+const pdf = await tracer.startActiveSpan('render-catalog-pdf', async span => {
+  try {
+    return await renderCatalog()
+  } finally {
+    span.end() // NOTE: a span you start, you must end, or it is never sent
+  }
+})
+```
+
+If it's an LLM call, follow the [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/) so LLM-aware views in your backend recognize it.
+
+## Outside of Server
+`Server` starts telemetry in its constructor and flushes it when it closes. In a standalone script, like a one-off migration, call `startTelemetry()` yourself (`traceJob` does it for you) and `await flushTelemetry()` before exiting. Otherwise the last few seconds of spans and logs leave with the process. `telemetryEnabled('traces')` tells you whether a signal has somewhere to go.
+
+A failed export is retried for up to 10 seconds and then dropped. Metrics recover on the next export, since they're cumulative, but a dropped batch of spans or logs is gone.
+
 # Authentication
 Pass an `authenticate` function to the Server constructor to enable authentication. It runs as an `onRequest` hook on all standard HTTP methods (GET, POST, PUT, PATCH, DELETE), except `/health` and swagger endpoints. The return value is available at `req.auth` in your route handlers and is included in production logs (minus `token`, `accessToken`, and `issuerConfig`).
 ```javascript
