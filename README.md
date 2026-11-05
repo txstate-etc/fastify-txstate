@@ -336,6 +336,8 @@ If it's an LLM call, follow the [GenAI semantic conventions](https://opentelemet
 ## Outside of Server
 `Server` starts telemetry in its constructor and flushes it when it closes. In a standalone script, like a one-off migration, call `startTelemetry()` yourself (`traceJob` does it for you) and `await flushTelemetry()` before exiting. Otherwise the last few seconds of spans and logs leave with the process. `telemetryEnabled('traces')` tells you whether a signal has somewhere to go.
 
+An uncaught exception, or an unhandled rejection under Node's default settings, is sent as an `exception` log record. Then up to 3 seconds are spent flushing before the process exits with code 1, as it would have anyway. If your app has its own `uncaughtException` listener, the crash is left to that listener and nothing is flushed early.
+
 A failed export is retried for up to 10 seconds and then dropped. Metrics recover on the next export, since they're cumulative, but a dropped batch of spans or logs is gone.
 
 # Authentication

@@ -43,6 +43,8 @@ const LOG_EXPORT_DELAY_MS = 1000
 const SPAN_EXPORT_DELAY_MS = 5000
 const BATCH_SIZE = 512
 const QUEUE_SIZE = 2048
+// k8s gives a pod 30s to stop, but a crashing process shouldn't sit on a dead collector that long
+const CRASH_FLUSH_TIMEOUT_MS = 3000
 
 const RETRYABLE_STATUS = new Set([429, 502, 503, 504])
 const USER_AGENT = `fastify-txstate-otlp-exporter/1.0 node/${process.versions.node}`
@@ -410,7 +412,23 @@ export function startTelemetry () {
   if (urls.metrics) every(metricExportInterval(), exportMetrics)
   if (urls.logs) every(LOG_EXPORT_DELAY_MS, async () => { await logQueue.export() })
   if (urls.traces) every(SPAN_EXPORT_DELAY_MS, async () => { await spanQueue.export() })
+  process.on('uncaughtException', onUncaughtException)
   console.info(`OpenTelemetry export enabled: ${Object.entries(urls).map(([signal, url]) => `${signal} to ${url}`).join(', ')}`)
+}
+
+let crashing = false
+/**
+ * Listening replaces Node's crash, so we print and exit with code 1 ourselves after the flush.
+ * Unhandled rejections arrive here too under Node's default --unhandled-rejections=throw.
+ */
+function onUncaughtException (err: Error) {
+  emitException(err, 'exception')
+  // another listener means the app chose to survive this, and the timers will export it
+  if (process.listenerCount('uncaughtException') > 1) return
+  if (crashing) return
+  crashing = true
+  console.error(err)
+  void Promise.race([flushTelemetry().catch(console.error), sleep(CRASH_FLUSH_TIMEOUT_MS)]).finally(() => process.exit(1))
 }
 
 /** whether startTelemetry found somewhere to send this signal */
