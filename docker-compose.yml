@@ -34,9 +34,11 @@ services:
       context: .
       dockerfile: Dockerfile.https
     attach: false
+    hostname: fastify-https-pod
     depends_on:
       - otel-collector
     environment:
+      KUBERNETES_SERVICE_HOST: 10.0.0.1
       NODE_ENV: production
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
       OTEL_SERVICE_NAME: fastify-https

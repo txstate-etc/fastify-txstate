@@ -974,6 +974,13 @@ describe('fastify-txstate', () => {
       expect(server!.resource['service.name']).to.equal('fastify-https')
       expect(server!.resource['deployment.environment.name']).to.equal('production')
       expect(server!.resource['service.version']).to.equal('v1.2.3')
+      expect(server!.resource['host.name']).to.equal('fastify-https-pod')
+      expect(server!.resource['k8s.pod.name']).to.equal('fastify-https-pod')
+      expect(server!.resource['process.runtime.name']).to.equal('nodejs')
+      expect(server!.resource['process.runtime.version']).to.match(/^\d+\.\d+\.\d+$/v)
+      expect(server!.resource['telemetry.sdk.name']).to.equal('fastify-txstate')
+      expect(server!.resource['telemetry.sdk.language']).to.equal('nodejs')
+      expect(server!.resource['telemetry.sdk.version']).to.match(/^\d+\.\d+\.\d+/v)
       expect(server!.attributes).to.include({ 'http.request.method': 'GET', 'http.route': '/tracing', 'url.path': '/tracing', 'http.response.status_code': '200' })
 
       const clients = spans.filter(s => s.span.kind === 3)

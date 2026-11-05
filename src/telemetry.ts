@@ -1,6 +1,8 @@
 /* eslint-disable no-console -- runs outside any request, so there's no fastify logger to use */
 import { context, logs as apiLogs, metrics as apiMetrics, SeverityNumber, SpanStatusCode, trace, type BatchObservableCallback, type Counter, type Logger, type Meter, type MetricOptions, type Observable, type ObservableCallback, type ObservableResult, type TimeInput } from '@opentelemetry/api'
 import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { hostname } from 'node:os'
 import { constants as perfConstants, monitorEventLoopDelay, performance, PerformanceObserver, type PerformanceEntry } from 'node:perf_hooks'
 import { getHeapSpaceStatistics } from 'node:v8'
 import { promisify } from 'node:util'
@@ -19,7 +21,8 @@ import { decodeExportResponse, decodeStatusMessage, encodeLogsRequest, encodeMet
  * OTEL_METRIC_EXPORT_INTERVAL and OTEL_{TRACES,METRICS,LOGS}_EXPORTER. One addition of ours, OTLP_PASSWORD, sends basic auth with
  * the service name as the username, unless the _HEADERS variables set Authorization. NODE_ENV becomes
  * deployment.environment.name and CI_GIT_VERSION (our Concourse pipelines' build arg) becomes service.version,
- * unless OTEL_RESOURCE_ATTRIBUTES sets them. Unlike the SDK, an unset endpoint means a silent no-op
+ * unless OTEL_RESOURCE_ATTRIBUTES sets them. The hostname becomes host.name, and inside Kubernetes also
+ * k8s.pod.name, alongside k8s.namespace.name from the service account mount. Unlike the SDK, an unset endpoint means a silent no-op
  * rather than localhost, so instruments can be used anywhere without checking whether telemetry is on.
  *
  * Each instrument tracks at most 2000 attribute sets, the spec's default cardinality limit; past
@@ -384,6 +387,24 @@ function exporterEnabled (signal: TelemetrySignal) {
  * an endpoint it does nothing and every instrument stays a no-op. Server calls this
  * automatically; repeat calls do nothing.
  */
+// src/ and lib/ both sit one level below package.json
+function packageVersion () {
+  try {
+    return (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version?: string }).version
+  } catch {
+    return undefined
+  }
+}
+
+// missing when the pod opts out of automountServiceAccountToken
+function k8sNamespace () {
+  try {
+    return readFileSync('/var/run/secrets/kubernetes.io/serviceaccount/namespace', 'utf8').trim() || undefined
+  } catch {
+    return undefined
+  }
+}
+
 export function startTelemetry () {
   if (started) return
   started = true
@@ -403,9 +424,18 @@ export function startTelemetry () {
     headers[signal] = signalHeaders
   }
   if (!urls.metrics && !urls.logs && !urls.traces) return
+  const host = hostname()
   resource = {
     'deployment.environment.name': envString('NODE_ENV'),
     'service.version': envString('CI_GIT_VERSION'),
+    'host.name': host,
+    'process.runtime.name': 'nodejs',
+    'process.runtime.version': process.versions.node,
+    'telemetry.sdk.name': 'fastify-txstate',
+    'telemetry.sdk.language': 'nodejs',
+    'telemetry.sdk.version': packageVersion(),
+    // kubernetes sets every container's hostname to its pod name
+    ...(envString('KUBERNETES_SERVICE_HOST') ? { 'k8s.pod.name': host, 'k8s.namespace.name': k8sNamespace() } : {}),
     ...resourceAttributes,
     'service.name': serviceName,
     // keeps each instance's cumulative series apart, or a backend would merge them into nonsense

@@ -209,7 +209,7 @@ A few opinions drive how it works:
 | `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | The SDK's samplers, except the remote ones. The default records every trace unless the caller's `traceparent` says it wasn't sampled. |
 | `OTEL_SDK_DISABLED` | `true` turns everything off, even with an endpoint set. |
 
-`NODE_ENV` becomes `deployment.environment.name` and `CI_GIT_VERSION` becomes `service.version`, unless `OTEL_RESOURCE_ATTRIBUTES` sets them.
+`NODE_ENV` becomes `deployment.environment.name` and `CI_GIT_VERSION` becomes `service.version`, unless `OTEL_RESOURCE_ATTRIBUTES` sets them. The hostname becomes `host.name`, and inside Kubernetes it's also sent as `k8s.pod.name`, along with `k8s.namespace.name`, so your traces and metrics join up with the cluster's own pod metrics.
 
 ## What You Get Automatically
 * A span for every request, continuing the caller's trace if it sent a `traceparent` header. `/health` and `/analytics` are left out, because probes and beacons would bury the real traffic. Add your own with `untracedRoutes.add('/metrics')`.
