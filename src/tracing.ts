@@ -415,7 +415,18 @@ interface DbQueryContext {
   database?: string
   serverAddress?: string
   serverPort?: number
+  /** oracle-async adds the binds a query opted in with `traceBinds`; mysql2 never sends this */
+  parameters?: Record<string, unknown>
   error?: Error & { code?: string, errno?: number }
+}
+
+/** db.query.parameter.<key>, which the semconv defines as a string */
+function parameterAttributes (parameters: Record<string, unknown> | undefined) {
+  const attributes: Record<string, string> = {}
+  for (const [key, value] of Object.entries(parameters ?? {})) {
+    attributes[`db.query.parameter.${key}`] = value instanceof Date ? value.toISOString() : String(value)
+  }
+  return attributes
 }
 
 const DB_CHANNELS = [
@@ -478,7 +489,8 @@ function traceDatabases () {
         'db.query.summary': summary,
         'db.query.text': text.slice(0, MAX_QUERY_TEXT),
         'server.address': ctx.serverAddress,
-        'server.port': ctx.serverPort
+        'server.port': ctx.serverPort,
+        ...parameterAttributes(ctx.parameters)
       }, { parent })
     }, error => ({ type: error.code ?? error.constructor.name, status: error.errno }))
   }
