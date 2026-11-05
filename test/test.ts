@@ -786,6 +786,7 @@ describe('fastify-txstate', () => {
   // and after the /shutdown test that lets it exit; fastify-https never shuts down
   describe('OpenTelemetry tests', () => {
     const spansFor = (traceId: string) => otlpSpans.filter(s => s.span.traceId === traceId)
+    const dbPoints = (system: string) => otlpMetrics.findLast(m => m.metric.name === 'db.client.operation.duration')?.metric.histogram?.dataPoints.filter(p => otlpAttributes(p.attributes)['db.system.name'] === system) ?? []
     const durationPoint = (route: string) => otlpMetrics.findLast(m => m.metric.name === 'http.server.request.duration')?.metric.histogram?.dataPoints.find(p => otlpAttributes(p.attributes)['http.route'] === route)
     let analyticsStart: number
     let tracingResp: { fetch: string, http: string }
@@ -834,6 +835,8 @@ describe('fastify-txstate', () => {
         && otlpMetrics.some(m => m.metric.name === 'testserver.cardinality')
         && ['v8js.memory.heap.used', 'process.memory.usage', 'nodejs.eventloop.delay.p99', 'nodejs.eventloop.utilization', 'nodejs.eventloop.time', 'http.server.active_requests'].every(name => otlpMetrics.some(m => m.metric.name === name))
         && !!durationPoint('/test')
+        && ['mysql', 'sqlite'].every(system => dbPoints(system).length >= 1)
+        && ['postgresql', 'mongodb'].every(system => dbPoints(system).length >= 2)
         && spansFor('9bf92f3577b34da6a3ce929d0e0e4736').length >= 1
         && spansFor('4bf92f3577b34da6a3ce929d0e0e4736').length >= 3
         && spansFor('3bf92f3577b34da6a3ce929d0e0e4736').length >= 3
@@ -928,6 +931,24 @@ describe('fastify-txstate', () => {
       const get = active!.metric.sum!.dataPoints.find(p => otlpAttributes(p.attributes)['http.request.method'] === 'GET')
       expect(otlpAttributes(get?.attributes)).to.deep.equal({ 'http.request.method': 'GET', 'url.scheme': 'https' })
       expect(get?.asDouble ?? 0).to.equal(0)
+    })
+
+    it('should export db.client.operation.duration without db.query.summary', () => {
+      const metric = otlpMetrics.findLast(m => m.metric.name === 'db.client.operation.duration')
+      expect(metric, 'histogram never reached the collector').to.exist
+      expect(metric!.metric.unit).to.equal('s')
+      expect(metric!.metric.histogram!.dataPoints.every(p => !otlpAttributes(p.attributes)['db.query.summary'])).to.be.true
+      const [mysql] = dbPoints('mysql')
+      expect(otlpAttributes(mysql.attributes)).to.deep.equal({ 'db.system.name': 'mysql', 'db.namespace': 'app', 'server.address': 'db', 'server.port': '3306' })
+      expect(mysql.sum).to.be.at.least(0.005)
+      // postgres.js only supplies host and port once the query is sent, so they're read when it settles
+      const postgres = dbPoints('postgresql')
+      expect(postgres.find(p => !otlpAttributes(p.attributes)['error.type'])).to.include({ count: '2' })
+      expect(otlpAttributes(postgres.find(p => otlpAttributes(p.attributes)['error.type'])!.attributes)).to.deep.equal({ 'db.system.name': 'postgresql', 'db.namespace': 'app', 'server.address': 'pg', 'server.port': '5432', 'error.type': '23505' })
+      expect(dbPoints('mongodb').map(p => otlpAttributes(p.attributes)['error.type'])).to.have.members([undefined, 'DuplicateKey'])
+      const [sqlite] = dbPoints('sqlite')
+      expect(otlpAttributes(sqlite.attributes)).to.deep.equal({ 'db.system.name': 'sqlite', 'db.namespace': '/data/app.db' })
+      expect(sqlite.sum).to.be.closeTo(0.005, 0.0001)
     })
 
     it('should export an app\'s own metrics and logs under its own scope', () => {

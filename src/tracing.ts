@@ -1,4 +1,4 @@
-import { context, createTraceState, INVALID_SPAN_CONTEXT, isSpanContextValid, propagation, ROOT_CONTEXT, SpanKind, SpanStatusCode, trace as apiTrace, TraceFlags, type Context, type ContextManager, type Link, type Span as ApiSpan, type SpanContext, type SpanOptions, type SpanStatus, type TextMapPropagator, type TimeInput, type Tracer as ApiTracer, type TracerProvider } from '@opentelemetry/api'
+import { context, createTraceState, INVALID_SPAN_CONTEXT, isSpanContextValid, propagation, ROOT_CONTEXT, SpanKind, SpanStatusCode, trace as apiTrace, TraceFlags, type Context, type ContextManager, type Histogram, type Link, type Span as ApiSpan, type SpanContext, type SpanOptions, type SpanStatus, type TextMapPropagator, type TimeInput, type Tracer as ApiTracer, type TracerProvider } from '@opentelemetry/api'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomBytes } from 'node:crypto'
@@ -488,6 +488,8 @@ function traceChannel<T extends { error?: Error }> (channel: string, startSpan: 
   })
 }
 
+const describeSqlError = (error: NonNullable<DbQueryContext['error']>) => ({ type: error.code ?? error.constructor.name, status: error.errno })
+
 function traceDatabases () {
   for (const { channel, system, parameterized } of DB_CHANNELS) {
     traceChannel<DbQueryContext>(channel, (ctx, parent) => {
@@ -503,7 +505,7 @@ function traceDatabases () {
         'server.port': ctx.serverPort,
         ...parameterAttributes(ctx.parameters)
       }, { parent })
-    }, error => ({ type: error.code ?? error.constructor.name, status: error.errno }))
+    }, describeSqlError)
   }
 }
 
@@ -519,11 +521,13 @@ interface PostgresContext {
   error?: Error & { code?: string, severity?: string }
 }
 
+const describePostgresError = (error: NonNullable<PostgresContext['error']>) => ({ type: error.code ?? error.constructor.name, status: error.severity ? error.code : undefined })
+
 function tracePostgres () {
   traceChannel<PostgresContext>('postgres:query', (ctx, parent) => new Span(ctx.database || 'postgresql', SpanKind.CLIENT, {
     'db.system.name': 'postgresql',
     'db.namespace': ctx.database || undefined
-  }, { parent }), error => ({ type: error.code ?? error.constructor.name, status: error.severity ? error.code : undefined }), (ctx, span) => {
+  }, { parent }), describePostgresError, (ctx, span) => {
     // parameters are left out: postgres.js only sends them with debug: true, and then sends every one
     const summary = ctx.query ? summarizeSql(ctx.query) : undefined
     if (summary) span.updateName(summary)
@@ -576,6 +580,8 @@ interface MongooseContext {
 // mongoose:cursor:next is left out: it fires once per batch. args is left out: filters carry values.
 const MONGOOSE_CHANNELS = ['mongoose:query', 'mongoose:aggregate', 'mongoose:model:save', 'mongoose:model:insertMany', 'mongoose:model:bulkWrite']
 
+const describeMongooseError = (error: NonNullable<MongooseContext['error']>) => ({ type: error.codeName ?? error.constructor.name, status: error.code })
+
 function traceMongoose () {
   for (const channel of MONGOOSE_CHANNELS) {
     traceChannel<MongooseContext>(channel, (ctx, parent) => new Span(`${ctx.operation} ${ctx.collection ?? ctx.database ?? 'mongodb'}`, SpanKind.CLIENT, {
@@ -585,8 +591,51 @@ function traceMongoose () {
       'db.operation.name': ctx.operation,
       'server.address': ctx.serverAddress,
       'server.port': ctx.serverPort
-    }, { parent }), error => ({ type: error.codeName ?? error.constructor.name, status: error.code }))
+    }, { parent }), describeMongooseError)
   }
+}
+
+/** Times each call a library wraps in TracingChannel#tracePromise, whether or not it has a span. */
+function timeChannel<T extends { error?: Error }> (duration: Histogram, channel: string, attributes: (ctx: T) => Attributes, describeError: (error: NonNullable<T['error']>) => { type: string }) {
+  const starts = new WeakMap<T, number>()
+  const finish = (ctx: T) => {
+    const start = starts.get(ctx)
+    if (start == null) return
+    starts.delete(ctx)
+    duration.record((performance.now() - start) / 1000, { ...attributes(ctx), 'error.type': ctx.error ? describeError(ctx.error).type : undefined })
+  }
+  tracingChannel<T>(channel).subscribe({
+    start (ctx) { starts.set(ctx, performance.now()) },
+    // a synchronous throw never reaches asyncStart
+    end (ctx) { if (ctx.error) finish(ctx) },
+    asyncStart: finish
+  })
+}
+
+let measuringDatabases = false
+/**
+ * db.client.operation.duration, when metrics are enabled. db.query.summary is left off: each
+ * distinct summary would be its own histogram series, exported for the life of the process.
+ */
+export function measureDatabases () {
+  if (measuringDatabases || !telemetryEnabled('metrics')) return
+  measuringDatabases = true
+  const duration = metrics.getMeter('fastify-txstate').createHistogram('db.client.operation.duration', {
+    description: 'Duration of database client operations.',
+    unit: 's',
+    advice: { explicitBucketBoundaries: [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10] }
+  })
+  for (const { channel, system } of DB_CHANNELS) {
+    timeChannel<DbQueryContext>(duration, channel, ctx => ({ 'db.system.name': system, 'db.namespace': ctx.database || undefined, 'server.address': ctx.serverAddress, 'server.port': ctx.serverPort }), describeSqlError)
+  }
+  timeChannel<PostgresContext>(duration, 'postgres:query', ctx => ({ 'db.system.name': 'postgresql', 'db.namespace': ctx.database || undefined, 'server.address': ctx.host ?? undefined, 'server.port': ctx.port ?? undefined }), describePostgresError)
+  for (const channel of MONGOOSE_CHANNELS) {
+    timeChannel<MongooseContext>(duration, channel, ctx => ({ 'db.system.name': 'mongodb', 'db.namespace': ctx.database || undefined, 'server.address': ctx.serverAddress, 'server.port': ctx.serverPort }), describeMongooseError)
+  }
+  subscribe('sqlite.db.query', msg => {
+    const { database, duration: nanos } = msg as SqliteQueryMessage
+    duration.record(nanos / 1e9, { 'db.system.name': 'sqlite', 'db.namespace': database.location?.() ?? undefined })
+  })
 }
 
 let subscribed = false
@@ -685,6 +734,7 @@ export function recordRequestErrors (app: FastifyInstance) {
 export async function traceJob<T> (name: string, task: () => T | Promise<T>, attributes?: Attributes): Promise<T> {
   startTelemetry()
   if (telemetryEnabled('traces')) instrument()
+  measureDatabases()
   const span = telemetryEnabled('traces') ? new Span(name, SpanKind.INTERNAL, { ...attributes }) : undefined
   return await context.with(span ? apiTrace.setSpan(ROOT_CONTEXT, span) : ROOT_CONTEXT, async () => {
     try {

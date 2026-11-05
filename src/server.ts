@@ -17,7 +17,7 @@ import { clone, destroyNulls, isBlank, isNotBlank, omit, set, sleep, stringifyDa
 import { HttpError, ValidationError, ValidationErrors, fstValidationToMessage } from './error.ts'
 import { getOAuthIssuerUrls, getProtectedResourceMetadataConfig, protectedResourceMetadataPath } from './jwt-auth.ts'
 import { flushTelemetry, startTelemetry } from './telemetry.ts'
-import { measureRequests, recordRequestErrors, traceRequests } from './tracing.ts'
+import { measureDatabases, measureRequests, recordRequestErrors, traceRequests } from './tracing.ts'
 
 // Routes contributed by registerOAuthCookieRoutes / registerUaCookieRoutes. The Server's
 // onRequest auth hook consults these at request time — except routes skip authentication
@@ -339,6 +339,7 @@ export default class Server {
     recordRequestErrors(this.app)
     traceRequests(this.app)
     measureRequests(this.app)
+    measureDatabases()
     this.app.addHook('onRoute', route => {
       if (!route.schema?.body) return
       const existingResponse = (route.schema.response ?? {
