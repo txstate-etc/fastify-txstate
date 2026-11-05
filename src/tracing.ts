@@ -700,6 +700,46 @@ export async function traceJob<T> (name: string, task: () => T | Promise<T>, att
   })
 }
 
+/**
+ * Runs a chunk of a request or job as a child of the active span, ending it when fn finishes,
+ * sync or async. A failure marks the span failed and is rethrown for the caller to handle or log;
+ * no log record is sent. With no active span, fn runs untraced; use traceJob to start a trace.
+ */
+export function withSpan<T> (name: string, fn: (span: ApiSpan) => T, attributes?: Attributes): T {
+  const parent = apiTrace.getSpanContext(context.active())
+  if (!telemetryEnabled('traces') || !parent || !isSpanContextValid(parent)) return fn(apiTrace.wrapSpanContext(INVALID_SPAN_CONTEXT))
+  const span = new Span(name, SpanKind.INTERNAL, { ...attributes }, { parent })
+  const fail = (e: unknown) => {
+    span.setError(exceptionAttributes(e)['exception.type'] as string | undefined ?? '_OTHER')
+    span.recordException(e)
+    span.end()
+  }
+  return context.with(apiTrace.setSpan(context.active(), span), () => {
+    let result: T
+    try {
+      result = fn(span)
+    } catch (e: unknown) {
+      fail(e)
+      throw e
+    }
+    if (!(result instanceof Promise)) {
+      span.end()
+      return result
+    }
+    const pending: Promise<unknown> = result
+    return (async () => {
+      try {
+        const value = await pending
+        span.end()
+        return value
+      } catch (e: unknown) {
+        fail(e)
+        throw e
+      }
+    })() as T
+  })
+}
+
 /** http.server.request.duration and http.server.active_requests, per the HTTP semantic conventions, when metrics are enabled; Server calls this too */
 export function measureRequests (app: FastifyInstance) {
   if (!telemetryEnabled('metrics')) return

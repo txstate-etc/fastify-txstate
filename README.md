@@ -324,15 +324,15 @@ trace.getActiveSpan()?.setAttributes({ 'library.book.id': book.id })
 Make a new span when a chunk of work deserves its own bar in the trace, like generating a big PDF:
 
 ```javascript
-const tracer = trace.getTracer('my-app')
-const pdf = await tracer.startActiveSpan('render-catalog-pdf', async span => {
-  try {
-    return await renderCatalog()
-  } finally {
-    span.end() // NOTE: a span you start, you must end, or it is never sent
-  }
-})
+import { withSpan } from 'fastify-txstate'
+const pdf = await withSpan('render-catalog-pdf', async span => {
+  const pdf = await renderCatalog()
+  span.setAttribute('catalog.pages', pdf.pageCount)
+  return pdf
+}, { 'catalog.id': catalog.id })
 ```
+
+`withSpan` ends the span when your function finishes, sync or async. If it throws, the span is marked failed and the error is rethrown for you to handle or log as usual. It only makes a child of an existing span, so outside a request or `traceJob` your function just runs untraced. If you need more control, like your own instrumentation scope or a different span kind, `trace.getTracer('my-app').startActiveSpan(...)` works too, but a span you start that way you must end yourself, or it is never sent.
 
 If it's an LLM call, follow the [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/) so LLM-aware views in your backend recognize it.
 

@@ -8,7 +8,7 @@ import { access, mkdir, utimes, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { PassThrough, Readable } from 'node:stream'
 import { isBlank, randomid, rescue, sleep } from 'txstate-utils'
-import Server, { FileSystemHandler, HttpError, SeverityNumber, SpanKind, analyticsPlugin, fileHandler, formDataFieldsFromParts, formDataFilesFromParts, jwtAuthenticate, logs, metrics, postFormData, registerUaCookieRoutes, recordError, requireCookieAuthUa, trace, traceJob } from '../src/index.ts'
+import Server, { FileSystemHandler, HttpError, SeverityNumber, SpanKind, analyticsPlugin, fileHandler, formDataFieldsFromParts, formDataFilesFromParts, jwtAuthenticate, logs, metrics, postFormData, registerUaCookieRoutes, recordError, requireCookieAuthUa, trace, traceJob, withSpan } from '../src/index.ts'
 
 class CustomError extends Error {}
 
@@ -201,6 +201,20 @@ server.swagger().then(async () => {
   server.app.get('/telemetry/report', async (req, res) => {
     recordError(new CustomError('could not reach the mail server'), { 'testserver.kind': 'test' })
     return {}
+  })
+  // child spans inside a request: one async with an outgoing call under it, one sync that fails
+  server.app.get('/telemetry/span', async (req, res) => {
+    const echoed = await withSpan('testserver.render', async span => {
+      span.setAttribute('testserver.pages', 3)
+      return (await fetch('http://fastify-test:4318/echo')).ok
+    }, { 'testserver.kind': 'test' })
+    let rethrown = false
+    try {
+      withSpan('testserver.parse', () => { throw new CustomError('bad input') })
+    } catch {
+      rethrown = true
+    }
+    return { echoed, rethrown }
   })
   // what a cron task looks like, run here so the test can trigger it
   server.app.get('/telemetry/job', async (req, res) => {

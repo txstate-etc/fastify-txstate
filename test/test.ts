@@ -791,6 +791,7 @@ describe('fastify-txstate', () => {
     let tracingResp: { fetch: string, http: string }
     let apiResp: { injected: string }
     let jobResp: { rethrown: boolean }
+    let spanResp: { echoed: boolean, rethrown: boolean }
     // make every request up front so the tests below share one wait on the exporters' flush intervals
     before(async () => {
       // the unsampled requests go first, so once the sampled ones arrive we know these would have too
@@ -819,6 +820,7 @@ describe('fastify-txstate', () => {
       await httpsClient.get('/500', { headers: { traceparent: '00-5bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' }, validateStatus: () => true })
       await httpsClient.get('/422', { headers: { traceparent: '00-cbf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' }, validateStatus: () => true })
       await httpsClient.get('/telemetry/report', { headers: { traceparent: '00-dbf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' } })
+      spanResp = (await httpsClient.get<{ echoed: boolean, rethrown: boolean }>('/telemetry/span', { headers: { traceparent: '00-0af92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' } })).data
       jobResp = (await httpsClient.get<{ rethrown: boolean }>('/telemetry/job', { headers: { traceparent: '00-ebf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' } })).data
       // analytics flush every 5s, spans every 5s, metrics every 1s (OTEL_METRIC_EXPORT_INTERVAL in docker-compose.yml)
       const arrived = () => otlpLogs.some(l => l.attributes.eventType === 'OtlpTestEvent')
@@ -1197,6 +1199,29 @@ describe('fastify-txstate', () => {
       expect(log!.attributes).to.include({ 'exception.type': 'CustomError', 'testserver.kind': 'test' })
       expect(server!.span.status?.code).to.equal(2)
       expect(server!.attributes['error.type']).to.equal('CustomError')
+    })
+
+    it('should make child spans with withSpan, sync or async, and fail one that throws without logging it', () => {
+      expect(spanResp).to.deep.equal({ echoed: true, rethrown: true })
+      const traceId = '0af92f3577b34da6a3ce929d0e0e4736'
+      const spans = spansFor(traceId)
+      const server = spans.find(s => s.span.kind === 2)
+      const render = spans.find(s => s.span.name === 'testserver.render')
+      const parse = spans.find(s => s.span.name === 'testserver.parse')
+      expect(render, 'render span never reached the collector').to.exist
+      expect(render!.span.kind).to.equal(1)
+      expect(render!.span.parentSpanId).to.equal(server?.span.spanId)
+      expect(render!.span.status?.code).to.not.equal(2)
+      expect(render!.attributes).to.include({ 'testserver.kind': 'test', 'testserver.pages': '3' })
+      // the outgoing call nests under the child span, not the request
+      expect(spans.find(s => s.span.kind === 3)?.span.parentSpanId).to.equal(render!.span.spanId)
+      expect(parse, 'parse span never reached the collector').to.exist
+      expect(parse!.span.parentSpanId).to.equal(server?.span.spanId)
+      expect(parse!.span.status?.code).to.equal(2)
+      expect(parse!.attributes['error.type']).to.equal('CustomError')
+      expect(otlpAttributes(parse!.span.events!.find(e => e.name === 'exception')!.attributes)).to.include({ 'exception.message': 'bad input' })
+      expect(server!.span.status?.code).to.not.equal(2)
+      expect(otlpLogs.filter(l => l.record.traceId === traceId)).to.be.empty
     })
 
     it('should trace a background job in its own trace, report its failure and rethrow', () => {
