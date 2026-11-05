@@ -346,6 +346,17 @@ An uncaught exception, or an unhandled rejection under Node's default settings, 
 
 A failed export is retried for up to 10 seconds and then dropped. Metrics recover on the next export, since they're cumulative, but a dropped batch of spans or logs is gone.
 
+## What We Left Out
+These were considered and skipped on purpose, so you don't need to go looking for them:
+
+* **CPU and memory gauges for the container.** Kubernetes already collects these, and the resource attributes join our telemetry to its pod metrics.
+* **`http.client.request.duration` histogram.** If you own the server you're calling, it has its own request histograms. If you don't, you can't do much with a poorly-performing 95th percentile anyway, and the spans show you when it's slow right now.
+* **Per-user metric attributes.** Every user would be a new series and blow past the 2000-series limit. `user.name` goes on request spans instead.
+* **A health check gauge.** The Kubernetes probes already watch `/health`.
+* **Sending pino logs over OTLP.** The ingress already logs every request, errors already go out as exception records, and log lines on stdout carry `trace_id` so you can find their trace.
+* **An in-memory telemetry capture for tests.** If you need to test your telemetry, add an OpenTelemetry collector container to your e2e setup, like this repo does.
+* **A helper to carry trace context into callbacks.** If callback or event emitter code loses track of the active span, wrap the callback in `AsyncResource.bind` from `node:async_hooks`.
+
 # Authentication
 Pass an `authenticate` function to the Server constructor to enable authentication. It runs as an `onRequest` hook on all standard HTTP methods (GET, POST, PUT, PATCH, DELETE), except `/health` and swagger endpoints. The return value is available at `req.auth` in your route handlers and is included in production logs (minus `token`, `accessToken`, and `issuerConfig`).
 ```javascript
