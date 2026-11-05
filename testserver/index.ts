@@ -2,7 +2,7 @@ import fastifyMultipart from '@fastify/multipart'
 import { context, logs as apiLogs, metrics as apiMetrics, propagation, SpanStatusCode, trace as apiTrace } from '@opentelemetry/api'
 import type { FromSchema } from 'json-schema-to-ts'
 import { createHash } from 'node:crypto'
-import { tracingChannel } from 'node:diagnostics_channel'
+import { channel, tracingChannel } from 'node:diagnostics_channel'
 import { get as httpGet } from 'node:http'
 import { access, mkdir, utimes, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
@@ -125,6 +125,26 @@ server.swagger().then(async () => {
   // publishes what mysql2 does, with the values already inlined into the query
   server.app.get('/tracing/db', async (req, res) => {
     await tracingChannel('mysql2:query').tracePromise(async () => { await sleep(5) }, { query: "SELECT * FROM `users` u JOIN roles r ON r.userId = u.id WHERE u.name = 'o\\'brien' AND u.age > 21", values: [], database: 'app', serverAddress: 'db', serverPort: 3306 })
+    return {}
+  })
+  // publishes what postgres.js does: the text, host and port only arrive once the query is sent
+  server.app.get('/tracing/postgres', async (req, res) => {
+    // tracePromise sets result to what the function returns, as postgres.js does
+    const select = { query: null as string | null, database: 'app', host: null as string | null, port: null as number | null }
+    await tracingChannel('postgres:query').tracePromise(async () => {
+      await sleep(5)
+      Object.assign(select, { query: 'select * from "users" where name = $1', host: 'pg', port: 5432 })
+      return [{}, {}]
+    }, select)
+    // count is rows affected; none come back
+    await tracingChannel('postgres:query').tracePromise(async () => { await sleep(5); return [] }, { query: 'update users set active = false', database: 'app', host: 'pg', port: 5432, count: 5000 })
+    const duplicate = Object.assign(new Error('duplicate key value violates unique constraint'), { code: '23505', severity: 'ERROR' })
+    await rescue(tracingChannel('postgres:query').tracePromise(async () => { await sleep(5); throw duplicate }, { query: 'insert into users (name) values ($1)', database: 'app', host: 'pg', port: 5432 }))
+    return {}
+  })
+  // publishes what node:sqlite does once a 5ms statement has run, with the values inlined
+  server.app.get('/tracing/sqlite', async (req, res) => {
+    channel('sqlite.db.query').publish({ sql: "SELECT * FROM users WHERE name = 'o''brien'", database: { location: () => '/data/app.db' }, duration: 5_000_000 })
     return {}
   })
   // publishes what mongoose does: a find, then a save that hits a duplicate key

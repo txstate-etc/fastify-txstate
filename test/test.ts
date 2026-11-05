@@ -71,6 +71,8 @@ interface OtlpJsonSpan {
   parentSpanId?: string
   name: string
   kind: number
+  startTimeUnixNano: string
+  endTimeUnixNano: string
   attributes?: OtlpJsonLogRecord['attributes']
   status?: { code?: number, message?: string }
   events?: { name: string, attributes?: OtlpJsonLogRecord['attributes'] }[]
@@ -808,6 +810,8 @@ describe('fastify-txstate', () => {
       await httpsClient.get('/health')
       await httpsClient.get('/telemetry/cardinality')
       await httpsClient.get('/tracing/db', { headers: { traceparent: '00-7bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' } })
+      await httpsClient.get('/tracing/postgres', { headers: { traceparent: '00-2bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' } })
+      await httpsClient.get('/tracing/sqlite', { headers: { traceparent: '00-1bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' } })
       await httpsClient.get('/tracing/mongo', { headers: { traceparent: '00-fbf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' } })
       await httpsClient.get('/500', { headers: { traceparent: '00-5bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' }, validateStatus: () => true })
       await httpsClient.get('/422', { headers: { traceparent: '00-cbf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' }, validateStatus: () => true })
@@ -830,6 +834,8 @@ describe('fastify-txstate', () => {
         && spansFor('abf92f3577b34da6a3ce929d0e0e4736').length >= 3
         && spansFor('7bf92f3577b34da6a3ce929d0e0e4736').length >= 2
         && spansFor('fbf92f3577b34da6a3ce929d0e0e4736').length >= 3
+        && spansFor('2bf92f3577b34da6a3ce929d0e0e4736').length >= 4
+        && spansFor('1bf92f3577b34da6a3ce929d0e0e4736').length >= 2
         && spansFor('5bf92f3577b34da6a3ce929d0e0e4736').length >= 1
         && spansFor('cbf92f3577b34da6a3ce929d0e0e4736').length >= 1
         && spansFor('dbf92f3577b34da6a3ce929d0e0e4736').length >= 1
@@ -1029,6 +1035,48 @@ describe('fastify-txstate', () => {
         'server.address': 'db',
         'server.port': '3306'
       })
+    })
+
+    it('should trace postgres.js queries, filling in what arrives after the query starts', () => {
+      const spans = spansFor('2bf92f3577b34da6a3ce929d0e0e4736')
+      const server = spans.find(s => s.span.kind === 2)
+      const select = spans.find(s => s.span.name === 'SELECT users')
+      const insert = spans.find(s => s.span.name === 'INSERT users')
+      const update = spans.find(s => s.span.name === 'UPDATE users')
+      expect(select, 'select span never reached the collector').to.exist
+      expect(update, 'update span never reached the collector').to.exist
+      expect(insert, 'insert span never reached the collector').to.exist
+      expect(select!.span.parentSpanId).to.equal(server?.span.spanId)
+      expect(select!.span.kind).to.equal(3)
+      expect(select!.attributes).to.include({
+        'db.system.name': 'postgresql',
+        'db.namespace': 'app',
+        'db.query.summary': 'SELECT users',
+        'db.query.text': 'select * from "users" where name = $1',
+        'db.response.returned_rows': '2',
+        'server.address': 'pg',
+        'server.port': '5432'
+      })
+      expect(update!.attributes['db.response.returned_rows']).to.equal('0')
+      expect(insert!.attributes).not.to.have.property('db.response.returned_rows')
+      expect(insert!.span.status?.code).to.equal(2)
+      expect(insert!.attributes).to.include({ 'error.type': '23505', 'db.response.status_code': '23505' })
+    })
+
+    it('should trace node:sqlite statements after they run, without literals', () => {
+      const spans = spansFor('1bf92f3577b34da6a3ce929d0e0e4736')
+      const server = spans.find(s => s.span.kind === 2)
+      const db = spans.find(s => s.span.kind === 3)
+      expect(db, 'sqlite span never reached the collector').to.exist
+      expect(db!.span.parentSpanId).to.equal(server?.span.spanId)
+      expect(db!.span.name).to.equal('SELECT users')
+      expect(db!.attributes).to.include({
+        'db.system.name': 'sqlite',
+        'db.namespace': '/data/app.db',
+        'db.query.text': 'SELECT * FROM users WHERE name = ?'
+      })
+      const ms = Number(BigInt(db!.span.endTimeUnixNano) - BigInt(db!.span.startTimeUnixNano)) / 1e6
+      expect(ms).to.be.closeTo(5, 0.5)
     })
 
     it('should trace mongoose operations from their diagnostics channels, without filters', () => {

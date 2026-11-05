@@ -11,7 +11,7 @@ import { emitException, envString, exceptionAttributes, exportSpan, metrics, sco
 /**
  * Distributed tracing, exported as OTLP spans through telemetry.ts. Nothing is patched: incoming
  * requests are traced with Fastify hooks, and outgoing work by subscribing to the diagnostics_channel
- * events that fetch (undici), node:http, mysql2 and mongoose already publish. Our own libraries join in the
+ * events that fetch (undici), node:http, mysql2, postgres.js, node:sqlite and mongoose already publish. Our own libraries join in the
  * same way, by publishing a TracingChannel listed in DB_CHANNELS rather than depending on us.
  *
  * We also register as @opentelemetry/api's global tracer provider, context manager and W3C
@@ -451,8 +451,15 @@ function summarizeSql (sql: string) {
 }
 
 /** A client span for each call a library wraps in TracingChannel#tracePromise, ended when it settles. */
-function traceChannel<T extends { error?: Error }> (channel: string, startSpan: (ctx: T, parent: SpanContext) => Span, describeError: (error: NonNullable<T['error']>) => { type: string, status?: string | number }) {
+function traceChannel<T extends { error?: Error }> (channel: string, startSpan: (ctx: T, parent: SpanContext) => Span, describeError: (error: NonNullable<T['error']>) => { type: string, status?: string | number }, finish?: (ctx: T, span: Span) => void) {
   const spans = new WeakMap<T, Span>()
+  const endSpan = (ctx: T) => {
+    const span = spans.get(ctx)
+    if (!span) return
+    spans.delete(ctx)
+    finish?.(ctx, span)
+    span.end()
+  }
   tracingChannel<T>(channel).subscribe({
     start (ctx) {
       const parent = activeSpanContext()
@@ -460,10 +467,10 @@ function traceChannel<T extends { error?: Error }> (channel: string, startSpan: 
     },
     end (ctx) {
       // a synchronous throw never reaches asyncStart
-      if (ctx.error) spans.get(ctx)?.end()
+      if (ctx.error) endSpan(ctx)
     },
     asyncStart (ctx) {
-      spans.get(ctx)?.end()
+      endSpan(ctx)
     },
     asyncEnd () { /* the span already ended at asyncStart */ },
     error (ctx) {
@@ -494,6 +501,62 @@ function traceDatabases () {
       }, { parent })
     }, error => ({ type: error.code ?? error.constructor.name, status: error.errno }))
   }
+}
+
+/** The context postgres.js (4.0+) publishes; query, host and port arrive once the query is sent. */
+interface PostgresContext {
+  query: string | null
+  database?: string
+  host: string | null
+  port: number | null
+  /** the rows; count is rows affected, which an UPDATE without RETURNING reports but doesn't return */
+  result?: unknown[]
+  /** a PostgresError has a SQLSTATE code and a severity; a network error has only the code */
+  error?: Error & { code?: string, severity?: string }
+}
+
+function tracePostgres () {
+  traceChannel<PostgresContext>('postgres:query', (ctx, parent) => new Span(ctx.database || 'postgresql', SpanKind.CLIENT, {
+    'db.system.name': 'postgresql',
+    'db.namespace': ctx.database || undefined
+  }, { parent }), error => ({ type: error.code ?? error.constructor.name, status: error.severity ? error.code : undefined }), (ctx, span) => {
+    // parameters are left out: postgres.js only sends them with debug: true, and then sends every one
+    const summary = ctx.query ? summarizeSql(ctx.query) : undefined
+    if (summary) span.updateName(summary)
+    span.setAttributes({
+      'db.query.summary': summary,
+      'db.query.text': ctx.query?.slice(0, MAX_QUERY_TEXT),
+      'db.response.returned_rows': Array.isArray(ctx.result) ? ctx.result.length : undefined,
+      'server.address': ctx.host ?? undefined,
+      'server.port': ctx.port ?? undefined
+    })
+  })
+}
+
+/** What node:sqlite (Node 26+) publishes after each statement runs; failed statements are not published. */
+interface SqliteQueryMessage {
+  /** with the values inlined */
+  sql: string
+  database: { location?: () => string | null }
+  /** nanoseconds */
+  duration: number
+}
+
+function traceSqlite () {
+  subscribe('sqlite.db.query', msg => {
+    // the statement ran synchronously, so the caller's span is still active
+    const parent = activeSpanContext()
+    if (!parent) return
+    const { sql, database, duration } = msg as SqliteQueryMessage
+    const endTime = performance.now()
+    const summary = summarizeSql(sql)
+    new Span(summary ?? 'sqlite', SpanKind.CLIENT, {
+      'db.system.name': 'sqlite',
+      'db.namespace': database.location?.() ?? undefined,
+      'db.query.summary': summary,
+      'db.query.text': sql.replace(sqlLiterals, '?').slice(0, MAX_QUERY_TEXT)
+    }, { parent, startTime: endTime - duration / 1e6 }).end(endTime)
+  })
 }
 
 /** The context mongoose (9.7+) publishes on its TracingChannels. */
@@ -531,6 +594,8 @@ function instrument () {
   traceFetch()
   traceHttpClient()
   traceDatabases()
+  tracePostgres()
+  traceSqlite()
   traceMongoose()
 }
 
