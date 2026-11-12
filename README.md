@@ -212,7 +212,7 @@ A few opinions drive how it works:
 `NODE_ENV` becomes `deployment.environment.name` and `CI_GIT_VERSION` becomes `service.version`, unless `OTEL_RESOURCE_ATTRIBUTES` sets them. The hostname becomes `host.name`, and inside Kubernetes it's also sent as `k8s.pod.name`, along with `k8s.namespace.name`, so your traces and metrics join up with the cluster's own pod metrics.
 
 ## What You Get Automatically
-* A span for every request, continuing the caller's trace if it sent a `traceparent` header. `/health` and `/analytics` are left out, because probes and beacons would bury the real traffic. Add your own with `untracedRoutes.add('/metrics')`.
+* A span for every request, continuing the caller's trace if it sent a `traceparent` header. An authenticated request's span carries `user.name` and, if the token has one, the client application as `auth.client.id`. `/health` and `/analytics` are left out, because probes and beacons would bury the real traffic. Add your own with `untracedRoutes.add('/metrics')`.
 * Child spans for outgoing `fetch` and `node:http` calls, which also send a `traceparent` so the next service joins the same trace.
 * Child spans for database queries from mysql2, [oracle-async](https://github.com/txstate-etc/oracle-async), [postgres.js](https://github.com/porsager/postgres) (4.0+), `node:sqlite` (Node 26+) and mongoose (9.7+).
 * A span for each `FileSystemHandler.put`, with the file's size.
@@ -336,6 +336,8 @@ const pdf = await withSpan('render-catalog-pdf', async span => {
 ```
 
 `withSpan` ends the span when your function finishes, sync or async. If it throws, the span is marked failed and the error is rethrown for you to handle or log as usual. It only makes a child of an existing span, so outside a request or `traceJob` your function just runs untraced. If you need more control, like your own instrumentation scope or a different span kind, `trace.getTracer('my-app').startActiveSpan(...)` works too, but a span you start that way you must end yourself, or it is never sent.
+
+Occasionally a span has to outlive any one function call, like one span covering a whole batch of calls. Start it with `trace.getTracer('my-app').startSpan(...)`, then wrap each piece of work in `trace.with(span, () => ...)` so that the queries and requests it makes land under your span. That one is ours rather than `@opentelemetry/api`'s, where the same thing takes `context.with(trace.setSpan(context.active(), span), fn)`.
 
 If it's an LLM call, follow the [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/) so LLM-aware views in your backend recognize it.
 

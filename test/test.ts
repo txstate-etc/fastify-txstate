@@ -821,6 +821,8 @@ describe('fastify-txstate', () => {
       await httpsClient.get('/500', { headers: { traceparent: '00-5bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' }, validateStatus: () => true })
       await httpsClient.get('/422', { headers: { traceparent: '00-cbf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' }, validateStatus: () => true })
       await httpsClient.get('/telemetry/report', { headers: { traceparent: '00-dbf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' } })
+      const { data: clientToken } = await authClient.get<string>('/generateToken', { params: { username: 'testuser', clientId: 'fastify-test' } })
+      await httpsClient.get('/test', { headers: { Authorization: `Bearer ${clientToken}`, traceparent: '00-1af92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' } })
       spanResp = (await httpsClient.get<{ echoed: boolean, rethrown: boolean }>('/telemetry/span', { headers: { traceparent: '00-0af92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' } })).data
       jobResp = (await httpsClient.get<{ rethrown: boolean }>('/telemetry/job', { headers: { traceparent: '00-ebf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' } })).data
       // analytics flush every 5s, spans every 5s, metrics every 1s (OTEL_METRIC_EXPORT_INTERVAL in docker-compose.yml)
@@ -1244,6 +1246,24 @@ describe('fastify-txstate', () => {
       expect(otlpAttributes(parse!.span.events!.find(e => e.name === 'exception')!.attributes)).to.include({ 'exception.message': 'bad input' })
       expect(server!.span.status?.code).to.not.equal(2)
       expect(otlpLogs.filter(l => l.record.traceId === traceId)).to.be.empty
+    })
+
+    it('should make spans inside trace.with children of the span it was given', () => {
+      const spans = spansFor('0af92f3577b34da6a3ce929d0e0e4736')
+      const server = spans.find(s => s.span.kind === 2)
+      const manual = spans.find(s => s.span.name === 'testserver.manual')
+      expect(manual, 'manual span never reached the collector').to.exist
+      expect(manual!.span.parentSpanId).to.equal(server?.span.spanId)
+      expect(spans.find(s => s.span.name === 'testserver.inner')?.span.parentSpanId).to.equal(manual!.span.spanId)
+      // the request's span is the active one again afterward
+      expect(spans.find(s => s.span.name === 'testserver.outer')?.span.parentSpanId).to.equal(server?.span.spanId)
+    })
+
+    it('should put the authenticated user and client on the request span', () => {
+      const server = spansFor('1af92f3577b34da6a3ce929d0e0e4736').find(s => s.span.kind === 2)
+      expect(server?.attributes).to.include({ 'user.name': 'testuser', 'auth.client.id': 'fastify-test' })
+      const anonymous = spansFor('0af92f3577b34da6a3ce929d0e0e4736').find(s => s.span.kind === 2)
+      expect(anonymous?.attributes).to.not.have.any.keys('user.name', 'auth.client.id')
     })
 
     it('should trace a background job in its own trace, report its failure and rethrow', () => {

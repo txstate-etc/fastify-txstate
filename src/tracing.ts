@@ -224,7 +224,13 @@ const tracerProvider: TracerProvider = {
 export const trace = {
   getTracer: (name: string, version?: string): ApiTracer => tracerProvider.getTracer(name, version),
   /** the current request's or job's span, to add attributes to */
-  getActiveSpan: (): ApiSpan | undefined => apiTrace.getActiveSpan()
+  getActiveSpan: (): ApiSpan | undefined => apiTrace.getActiveSpan(),
+  /**
+   * Runs fn with the given span as the active one, so the spans made inside it, ours included,
+   * become its children. For a span you started with getTracer().startSpan() that outlives any
+   * one call, where neither withSpan nor startActiveSpan fits. Ending it is still up to you.
+   */
+  with: <T>(span: ApiSpan, fn: () => T): T => context.with(apiTrace.setSpan(context.active(), span), fn)
 }
 
 /** the SDK's AsyncLocalStorageContextManager, except that bind() only wraps functions, not EventEmitters */
@@ -689,7 +695,7 @@ export function traceRequests (app: FastifyInstance) {
   app.addHook('onResponse', (req, res, done) => {
     const span = requestSpans.get(req)
     if (span) {
-      span.setAttributes({ 'http.response.status_code': res.statusCode, 'user.name': req.auth?.username })
+      span.setAttributes({ 'http.response.status_code': res.statusCode, 'user.name': req.auth?.username, 'auth.client.id': req.auth?.clientId })
       if (res.statusCode >= 500) span.setError(String(res.statusCode))
       span.end()
     }

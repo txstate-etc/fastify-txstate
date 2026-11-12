@@ -214,6 +214,11 @@ server.swagger().then(async () => {
     } catch {
       rethrown = true
     }
+    // a span the app manages itself, made active for only part of its life
+    const manual = trace.getTracer('testserver').startSpan('testserver.manual')
+    trace.with(manual, () => { withSpan('testserver.inner', () => { /* nothing to do */ }) })
+    withSpan('testserver.outer', () => { /* nothing to do */ })
+    manual.end()
     return { echoed, rethrown }
   })
   // what a cron task looks like, run here so the test can trigger it

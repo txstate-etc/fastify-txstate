@@ -1,6 +1,13 @@
 # Changelog
 
-## 4.4.0 (in progress)
+## 4.4.1
+
+### New Features
+
+- `trace.with(span, fn)` runs a function with a span you started yourself as the active one, so spans made inside it become its children. It's for a span that outlives any one call, where `withSpan` doesn't fit.
+- Request spans now carry the authenticated client application as `auth.client.id`, from `req.auth.clientId`, alongside `user.name`.
+
+## 4.4.0
 
 ### New Features
 
