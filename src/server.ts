@@ -8,13 +8,12 @@ import ajvFormats from 'ajv-formats'
 import { type FastifyInstance, type FastifyRequest, type FastifyReply, type FastifyServerOptions, type FastifyError, fastify, type FastifyBaseLogger, type RawServerDefault, type FastifySchema, type FastifySchemaValidationError } from 'fastify'
 import type { JSONSchema } from 'json-schema-to-ts'
 import fs from 'node:fs'
-import pino from 'pino'
 import http from 'node:http'
-import { Writable } from 'node:stream'
 import type http2 from 'node:http2'
 import type { OpenAPIV3 } from 'openapi-types'
 import { clone, destroyNulls, isBlank, isNotBlank, omit, set, sleep, stringifyDates, toArray } from 'txstate-utils'
 import { HttpError, ValidationError, ValidationErrors, fstValidationToMessage } from './error.ts'
+import { devLogger, logContext, prodLogger, setRootLogger } from './log.ts'
 import { getOAuthIssuerUrls, getProtectedResourceMetadataConfig, protectedResourceMetadataPath } from './jwt-auth.ts'
 import { flushTelemetry, startTelemetry } from './telemetry.ts'
 import { measureDatabases, measureRequests, recordRequestErrors, traceRequests } from './tracing.ts'
@@ -188,54 +187,6 @@ declare module 'fastify' {
   }
 }
 
-interface PinoLogEntry {
-  req?: { method: string, url: string }
-  res?: { statusCode: number }
-  responseTime?: number
-  err?: unknown
-  msg?: string
-}
-
-/* eslint-disable no-console -- devLogger intentionally writes to console */
-export const devLogger = pino({
-  level: 'info'
-}, new Writable({
-  write (chunk: Buffer, _encoding: string, callback: () => void) {
-    const obj = JSON.parse(String(chunk)) as PinoLogEntry
-    if (obj.req) console.info(`${obj.req.method} ${obj.req.url}`)
-    else if (obj.res) console.info(`${obj.res.statusCode} - ${obj.responseTime}`)
-    else if (obj.err) console.error(obj.err)
-    else console.info(obj.msg || obj)
-    callback()
-  }
-}))
-/* eslint-enable no-console */
-
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call -- pino serializer params are typed as any */
-export const prodLogger = pino({
-  level: 'info',
-  serializers: {
-    req (req: any) {
-      return {
-        method: req.method,
-        url: req.url.replace(/(?<param>token|unifiedJwt)=[\w.]+/iv, '$<param>=redacted'),
-        remoteAddress: req.ip,
-        traceparent: req.headers.traceparent
-      }
-    },
-    res (res: any) {
-      return {
-        statusCode: res.statusCode,
-        url: res.request?.url.replace(/(?<param>token|unifiedJwt)=[\w.]+/iv, '$<param>=redacted'),
-        length: Number(toArray(res.getHeader?.('content-length'))[0]),
-        ...omit(res.extraLogInfo, 'auth'),
-        auth: omit(res.request?.auth ?? res.extraLogInfo?.auth ?? {}, 'token', 'accessToken', 'issuerConfig')
-      }
-    }
-  }
-})
-/* eslint-enable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call */
-
 export type FastifyInstanceTyped = FastifyInstance<RawServerDefault, http.IncomingMessage, http.ServerResponse, FastifyBaseLogger, JsonSchemaToTsProvider>
 
 export class OriginChecker {
@@ -338,6 +289,9 @@ export default class Server {
     // before traceRequests, whose onResponse ends the span this records on
     recordRequestErrors(this.app)
     traceRequests(this.app)
+    setRootLogger(this.app.log)
+    // after traceRequests, so the request's logger already has its trace ids
+    this.app.addHook('onRequest', (req, res, done) => { logContext.run(req, done) })
     measureRequests(this.app)
     measureDatabases()
     this.app.addHook('onRoute', route => {

@@ -305,6 +305,30 @@ describe('fastify-txstate', () => {
       const resp = await httpsClient.get('/logging')
       expect(resp.data.success).to.be.true
     })
+    for (const [name, c] of [['with telemetry', () => httpsClient], ['without telemetry', () => client]] as const) {
+      it(`should make the log export the request's logger inside a request, ${name}`, async () => {
+        const { data } = await c().post<{ same: boolean, bindings: Record<string, unknown>, expected: Record<string, unknown> }>('/logging/context', { hello: 'x'.repeat(100000) })
+        expect(data.same).to.be.true
+        expect(data.bindings).to.deep.equal(data.expected)
+        expect(data.bindings.reqId).to.be.a('string')
+      })
+      it(`should bind the job name to the log export inside traceJob, ${name}`, async () => {
+        const { data } = await c().get<{ bindings: Record<string, unknown>, after: Record<string, unknown> }>('/logging/job')
+        expect(data.bindings.job).to.equal('testserver.logjob')
+        expect(data.bindings.reqId).to.be.undefined
+        expect(data.after.reqId).to.be.a('string')
+        expect(data.after.job).to.be.undefined
+      })
+    }
+    it('should put trace ids on the log export when telemetry is enabled', async () => {
+      const traceparent = '00-6cf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01'
+      const { data: inRequest } = await httpsClient.post<{ bindings: Record<string, string> }>('/logging/context', {}, { headers: { traceparent } })
+      expect(inRequest.bindings.trace_id).to.equal('6cf92f3577b34da6a3ce929d0e0e4736')
+      expect(inRequest.bindings.span_id).to.match(/^[\da-f]{16}$/v)
+      const { data: inJob } = await httpsClient.get<{ bindings: Record<string, string> }>('/logging/job', { headers: { traceparent } })
+      expect(inJob.bindings.trace_id).to.match(/^[\da-f]{32}$/v).and.not.equal('6cf92f3577b34da6a3ce929d0e0e4736')
+      expect(inJob.bindings.span_id).to.match(/^[\da-f]{16}$/v)
+    })
   })
 
   describe('validation tests', () => {

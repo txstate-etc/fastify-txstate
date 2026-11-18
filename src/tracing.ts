@@ -5,6 +5,7 @@ import { randomBytes } from 'node:crypto'
 import { subscribe, tracingChannel } from 'node:diagnostics_channel'
 import type { ClientRequest, IncomingMessage } from 'node:http'
 import { toArray } from 'txstate-utils'
+import { jobLogger, logContext } from './log.ts'
 import { SpanFlags, type InstrumentationScope, type SpanEventData, type SpanLinkData } from './otlp.encode.ts'
 import { emitException, envString, exceptionAttributes, exportSpan, metrics, scopeFor, startTelemetry, telemetryEnabled, toNano, type Attributes } from './telemetry.ts'
 
@@ -739,7 +740,8 @@ let jobDuration: Histogram | undefined
  * calls and queries are traced too. A failure is sent as an exception log record and marks the
  * span failed, then rethrown, so the caller's catch only needs to protect the scheduler. Each run
  * is recorded in the job.duration histogram by name, so name is a metric attribute and must not
- * vary per run; attributes go on the span and log record only.
+ * vary per run; attributes go on the span and log record only. Inside the task, the `log` export
+ * carries the job's name and trace ids.
  */
 export async function traceJob<T> (name: string, task: () => T | Promise<T>, attributes?: Attributes): Promise<T> {
   startTelemetry()
@@ -753,7 +755,9 @@ export async function traceJob<T> (name: string, task: () => T | Promise<T>, att
   const duration = jobDuration
   const start = performance.now()
   const span = telemetryEnabled('traces') ? new Span(name, SpanKind.INTERNAL, { ...attributes }) : undefined
-  return await context.with(span ? apiTrace.setSpan(ROOT_CONTEXT, span) : ROOT_CONTEXT, async () => {
+  const { traceId, spanId } = span?.spanContext() ?? {}
+  const logger = jobLogger({ job: name, ...(span && { trace_id: traceId, span_id: spanId }) })
+  return await logContext.run(logger, async () => await context.with(span ? apiTrace.setSpan(ROOT_CONTEXT, span) : ROOT_CONTEXT, async () => {
     let errorType: string | undefined
     try {
       return await task()
@@ -767,7 +771,7 @@ export async function traceJob<T> (name: string, task: () => T | Promise<T>, att
       span?.end()
       duration.record((performance.now() - start) / 1000, { 'job.name': name, 'error.type': errorType })
     }
-  })
+  }))
 }
 
 /**

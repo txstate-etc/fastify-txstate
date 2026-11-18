@@ -187,6 +187,32 @@ If you want to provide your own logger, you can pass a pino instance via the `lo
 
 You can also simply add information to the `reply.extraLogInfo` object and it will automatically appear in the outgoing access log in production.
 
+## Logging outside of a route handler
+`req.log` is great when you have the request in hand, but what about a service method three calls deep, or a cron job that has no request at all? You end up either passing `req.log` down through every function or falling back to `console.info`, which skips pino, so in production that line isn't JSON and isn't tied to anything.
+
+Import `log` instead. It works anywhere:
+
+```javascript
+import { log, traceJob } from 'fastify-txstate'
+
+async function renewBook (book) {
+  // inside a request, this is exactly req.log: same reqId, same trace ids
+  log.info({ bookId: book.id }, 'renewed book')
+}
+
+setInterval(() => {
+  traceJob('sync-overdue-books', async () => {
+    // {"level":30,"job":"sync-overdue-books","trace_id":"...","span_id":"...","count":12,"msg":"synced overdue books"}
+    log.info({ count: 12 }, 'synced overdue books')
+  }).catch(e => { log.error(e) }) // outside the job, so this line doesn't have the job name
+}, 60_000)
+```
+
+Inside a request, `log` is that request's `req.log`, even if one of your hooks replaced it with a child logger. Inside `traceJob`, it's the server's logger with the job name added, plus `trace_id` and `span_id` when tracing is enabled, so you can jump from a log line to the job's trace. Anywhere else it's the server's logger, so your custom `loggerInstance` is respected. In a script that never creates a `Server`, it's `devLogger` or `prodLogger` depending on `NODE_ENV`.
+
+### Note about callbacks that lose the request
+`log` finds the request with `AsyncLocalStorage`, which follows promises and timers but can lose track inside a library that queues callbacks and runs them later on its own, like some connection pools. If a line shows up without its `reqId`, that's why. Use `req.log` at that spot.
+
 # OpenTelemetry
 Set `OTEL_EXPORTER_OTLP_ENDPOINT` and the server starts sending traces, metrics and logs to it. There's no SDK to install and nothing to register. Leave it unset and everything in this section quietly does nothing, so instrumentation can stay in your code everywhere and only costs anything in environments that have a collector.
 
@@ -261,6 +287,8 @@ setInterval(() => {
 ```
 
 If the job throws, the error is sent as a log record, the span is marked failed, and then the error is rethrown. You still need the `catch`, but only to keep the rejection from crashing your process. There's no need to log it again.
+
+Inside the job, the [`log` export](#logging-outside-of-a-route-handler) adds the job's name and trace ids to every line, so use it instead of `console.info`.
 
 Every run is also recorded in the `job.duration` metric by job name, with `error.type` set when it failed, so you can alert on a job that has stopped succeeding without digging through traces. That makes the name a metric attribute, so keep it fixed, like `sync-overdue-books`, and put ids and other per-run details in the attributes argument, which only goes on the span and the log record.
 

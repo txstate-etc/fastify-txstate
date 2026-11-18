@@ -1,5 +1,11 @@
 # Changelog
 
+## 4.4.2
+
+### New Features
+
+- New `log` export: a logger you can import anywhere instead of passing `req.log` around or falling back to `console.info`. Inside a request it is that request's `req.log`, with the same `reqId` and trace ids. Inside `traceJob` it is the server's logger with the job's name added as `job`, plus `trace_id` and `span_id` when tracing is enabled. Anywhere else it is the server's logger, so background work logs JSON in production too. See "Logging outside of a route handler" in the README.
+
 ## 4.4.1
 
 ### New Features

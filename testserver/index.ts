@@ -7,8 +7,9 @@ import { get as httpGet } from 'node:http'
 import { access, mkdir, utimes, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { PassThrough, Readable } from 'node:stream'
+import type { Logger } from 'pino'
 import { isBlank, randomid, rescue, sleep } from 'txstate-utils'
-import Server, { FileSystemHandler, HttpError, SeverityNumber, SpanKind, analyticsPlugin, fileHandler, formDataFieldsFromParts, formDataFilesFromParts, jwtAuthenticate, logs, metrics, postFormData, registerUaCookieRoutes, recordError, requireCookieAuthUa, trace, traceJob, withSpan } from '../src/index.ts'
+import Server, { FileSystemHandler, HttpError, SeverityNumber, SpanKind, analyticsPlugin, fileHandler, formDataFieldsFromParts, formDataFilesFromParts, jwtAuthenticate, log, logs, metrics, postFormData, registerUaCookieRoutes, recordError, requireCookieAuthUa, trace, traceJob, withSpan } from '../src/index.ts'
 
 class CustomError extends Error {}
 
@@ -232,6 +233,21 @@ server.swagger().then(async () => {
       return { rethrown: true }
     }
     return { rethrown: false }
+  })
+  // FastifyBaseLogger leaves out pino's bindings()
+  const bindings = (logger: unknown) => (logger as Logger).bindings()
+  // the log export should be the request's logger in a request, even after a body is parsed
+  server.app.post('/logging/context', async (req, res) => {
+    await sleep(5)
+    return { same: bindings(log).reqId === req.id, bindings: bindings(log), expected: bindings(req.log) }
+  })
+  // and carry the job's name in a job, without leaking the request's bindings into it
+  server.app.get('/logging/job', async (req, res) => {
+    const jobBindings = await traceJob('testserver.logjob', async () => {
+      await sleep(5)
+      return bindings(log)
+    })
+    return { bindings: jobBindings, after: bindings(log) }
   })
   server.app.get('/logging', async (req, res) => {
     res.extraLogInfo = { hello: 'world' }
