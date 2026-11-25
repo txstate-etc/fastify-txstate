@@ -12,7 +12,7 @@ import { emitException, envString, exceptionAttributes, exportSpan, metrics, sco
 /**
  * Distributed tracing, exported as OTLP spans through telemetry.ts. Nothing is patched: incoming
  * requests are traced with Fastify hooks, and outgoing work by subscribing to the diagnostics_channel
- * events that fetch (undici), node:http, mysql2, postgres.js, node:sqlite and mongoose already publish. Our own libraries join in the
+ * events that fetch (undici), node:http, mysql2, postgres.js, node:sqlite, mongoose and ldap-async already publish. Our own libraries join in the
  * same way, by publishing a TracingChannel listed in DB_CHANNELS rather than depending on us.
  *
  * We also register as @opentelemetry/api's global tracer provider, context manager and W3C
@@ -602,6 +602,40 @@ function traceMongoose () {
   }
 }
 
+/** The context ldap-async (3.2+) publishes, once per round trip to the server. */
+interface LdapContext {
+  operation: 'search' | 'add' | 'modify' | 'delete' | 'modifyDN'
+  /** left out: a search base is harmless, but any other DN names a person or group */
+  dn: string
+  /** search only, with the values inline */
+  filter?: string
+  scope?: string
+  serverAddress?: string
+  serverPort?: number
+  /** search only, set before the span ends */
+  entries?: number
+  /** ldapts errors have the numeric LDAP result code; network errors have a string like ECONNREFUSED */
+  error?: Error & { code?: number | string }
+}
+
+/** every assertion value in an LDAP filter, except a bare * that only tests for presence */
+const ldapFilterValues = /=(?!\*\))[^\)]*/gv
+
+const describeLdapError = (error: NonNullable<LdapContext['error']>) => ({ type: typeof error.code === 'string' ? error.code : error.name, status: typeof error.code === 'number' ? error.code : undefined })
+
+function traceLdap () {
+  traceChannel<LdapContext>('ldap-async:operation', (ctx, parent) => new Span(`ldap ${ctx.operation}`, SpanKind.CLIENT, {
+    'db.system.name': 'ldap',
+    'db.operation.name': ctx.operation,
+    'db.query.text': ctx.filter?.replace(ldapFilterValues, '=?').slice(0, MAX_QUERY_TEXT),
+    'ldap.search.scope': ctx.scope,
+    'server.address': ctx.serverAddress,
+    'server.port': ctx.serverPort
+  }, { parent }), describeLdapError, (ctx, span) => {
+    if (ctx.entries != null) span.setAttributes({ 'db.response.returned_rows': ctx.entries })
+  })
+}
+
 /** Times each call a library wraps in TracingChannel#tracePromise, whether or not it has a span. */
 function timeChannel<T extends { error?: Error }> (duration: Histogram, channel: string, attributes: (ctx: T) => Attributes, describeError: (error: NonNullable<T['error']>) => { type: string }) {
   const starts = new WeakMap<T, number>()
@@ -618,6 +652,17 @@ function timeChannel<T extends { error?: Error }> (duration: Histogram, channel:
     asyncStart: finish
   })
 }
+
+/** What a connection pool publishes each time it hands out a connection; ldap-async defines this shape. */
+interface ConnectionWaitMessage {
+  poolName: string
+  /** milliseconds, including opening a new connection if the pool had to */
+  duration: number
+}
+
+const CONNECTION_WAIT_CHANNELS = [
+  { channel: 'ldap-async:connection:wait', system: 'ldap' }
+]
 
 let measuringDatabases = false
 /**
@@ -639,10 +684,24 @@ export function measureDatabases () {
   for (const channel of MONGOOSE_CHANNELS) {
     timeChannel<MongooseContext>(duration, channel, ctx => ({ 'db.system.name': 'mongodb', 'db.namespace': ctx.database || undefined, 'server.address': ctx.serverAddress, 'server.port': ctx.serverPort }), describeMongooseError)
   }
+  // a search and a modify take very different amounts of time, and there are only five operations
+  timeChannel<LdapContext>(duration, 'ldap-async:operation', ctx => ({ 'db.system.name': 'ldap', 'db.operation.name': ctx.operation, 'server.address': ctx.serverAddress, 'server.port': ctx.serverPort }), describeLdapError)
   subscribe('sqlite.db.query', msg => {
     const { database, duration: nanos } = msg as SqliteQueryMessage
     duration.record(nanos / 1e9, { 'db.system.name': 'sqlite', 'db.namespace': database.location?.() ?? undefined })
   })
+  // separates "the server is slow" from "our pool is too small", which db.client.operation.duration lumps together
+  const waitTime = metrics.getMeter('fastify-txstate').createHistogram('db.client.connection.wait_time', {
+    description: 'The time it took to obtain an open connection from the pool.',
+    unit: 's',
+    advice: { explicitBucketBoundaries: [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10] }
+  })
+  for (const { channel, system } of CONNECTION_WAIT_CHANNELS) {
+    subscribe(channel, msg => {
+      const { poolName, duration: ms } = msg as ConnectionWaitMessage
+      waitTime.record(ms / 1000, { 'db.system.name': system, 'db.client.connection.pool.name': poolName })
+    })
+  }
 }
 
 let subscribed = false
@@ -657,6 +716,7 @@ function instrument () {
   tracePostgres()
   traceSqlite()
   traceMongoose()
+  traceLdap()
 }
 
 // probes and beacons would bury the real traffic, in traces and request metrics; the analytics plugin adds its route here

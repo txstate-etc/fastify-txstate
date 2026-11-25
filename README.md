@@ -240,17 +240,18 @@ A few opinions drive how it works:
 ## What You Get Automatically
 * A span for every request, continuing the caller's trace if it sent a `traceparent` header. An authenticated request's span carries `user.name` and, if the token has one, the client application as `auth.client.id`. `/health` and `/analytics` are left out, because probes and beacons would bury the real traffic. Add your own with `untracedRoutes.add('/metrics')`.
 * Child spans for outgoing `fetch` and `node:http` calls, which also send a `traceparent` so the next service joins the same trace.
-* Child spans for database queries from mysql2, [oracle-async](https://github.com/txstate-etc/oracle-async), [postgres.js](https://github.com/porsager/postgres) (4.0+), `node:sqlite` (Node 26+) and mongoose (9.7+).
+* Child spans for database queries from mysql2, [oracle-async](https://github.com/txstate-etc/oracle-async), [postgres.js](https://github.com/porsager/postgres) (4.0+), `node:sqlite` (Node 26+) and mongoose (9.7+), and for LDAP operations from [ldap-async](https://github.com/txstate-etc/ldap-async) (3.2+).
 * A span for each `FileSystemHandler.put`, with the file's size.
 * The `http.server.request.duration` and `http.server.active_requests` metrics, so you get request rates, error rates and latency percentiles per route, plus how many requests are in flight.
-* The `db.client.operation.duration` metric, by database and server rather than by query, since every distinct query would be a series of its own. Traces tell you which query was slow. Unlike the spans, it counts every query, even ones run outside a request.
+* The `db.client.operation.duration` metric, by database and server rather than by query, since every distinct query would be a series of its own. Traces tell you which query was slow. LDAP is also split by operation (search, modify, etc.), since there are only five and a search and a modify take very different amounts of time.
+* The `db.client.connection.wait_time` metric for ldap-async, by pool, which tells you whether operations are waiting for a free connection. Operation duration includes that wait, so this is how you tell a slow server apart from a pool that's too small. Unlike the spans, it counts every query, even ones run outside a request.
 * V8 heap usage per heap space (`v8js.memory.heap.used` and friends), resident memory (`process.memory.usage`) and garbage collection pauses (`v8js.gc.duration`), so you can spot a memory leak or GC pressure before the pod gets OOM-killed.
 * Event loop delay (`nodejs.eventloop.delay.p99` and friends) and utilization (`nodejs.eventloop.utilization`). Delay tells you when something is blocking the thread and making every request wait; utilization near 1 means the process is saturated even if CPU looks low.
 * Every error that ends in a 5xx, sent as a log record attached to its trace.
 * `trace_id` and `span_id` on every log line written during a request, so you can jump from a log line to its trace.
 
 ### Note about what ends up in your traces
-Query text is recorded, but bind values aren't. mysql2's `query()` and `node:sqlite` put the values directly into the SQL text before we see it, so we replace every literal with `?`. That's why `execute()` is preferable to `query()` in mysql2 if you want readable spans. mongoose filters and documents are never recorded. `token` and `unifiedJwt` query parameters are redacted from recorded URLs.
+Query text is recorded, but bind values aren't. mysql2's `query()` and `node:sqlite` put the values directly into the SQL text before we see it, so we replace every literal with `?`. That's why `execute()` is preferable to `query()` in mysql2 if you want readable spans. mongoose filters and documents are never recorded. LDAP filters are recorded with every value replaced by `?`, so `(&(objectClass=person)(uid=fry))` becomes `(&(objectClass=?)(uid=?))`, and DNs are never recorded, since most of them name a person. `token` and `unifiedJwt` query parameters are redacted from recorded URLs.
 
 Sometimes you really do need a bind value, say to find the one slow book among thousands of identical `SELECT * FROM books WHERE id = ?` spans. oracle-async lets you opt in per query with `traceBinds`; see its README.
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## 4.4.3
+
+### New Features
+
+- LDAP operations from ldap-async 3.2+ get child spans and are timed in `db.client.operation.duration`, with `db.system.name` set to `ldap` and `db.operation.name` set to the operation (search, add, modify, delete, modifyDN). Search spans record the filter as `db.query.text` with every value replaced by `?`, the scope, and the number of entries returned. DNs are never recorded.
+- New `db.client.connection.wait_time` histogram, by `db.client.connection.pool.name`, recording how long each ldap-async operation waited for a connection from its pool.
+
 ## 4.4.2
 
 ### New Features

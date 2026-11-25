@@ -842,6 +842,7 @@ describe('fastify-txstate', () => {
       await httpsClient.post('/filestorage/upload', upload, { headers: { traceparent: '00-0cf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' } })
       await httpsClient.get('/tracing/sqlite', { headers: { traceparent: '00-1bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' } })
       await httpsClient.get('/tracing/mongo', { headers: { traceparent: '00-fbf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' } })
+      await httpsClient.get('/tracing/ldap', { headers: { traceparent: '00-0df92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' } })
       await httpsClient.get('/500', { headers: { traceparent: '00-5bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' }, validateStatus: () => true })
       await httpsClient.get('/422', { headers: { traceparent: '00-cbf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' }, validateStatus: () => true })
       await httpsClient.get('/telemetry/report', { headers: { traceparent: '00-dbf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' } })
@@ -862,7 +863,8 @@ describe('fastify-txstate', () => {
         && ['v8js.memory.heap.used', 'process.memory.usage', 'nodejs.eventloop.delay.p99', 'nodejs.eventloop.utilization', 'nodejs.eventloop.time', 'http.server.active_requests'].every(name => otlpMetrics.some(m => m.metric.name === name))
         && !!durationPoint('/test')
         && ['mysql', 'sqlite'].every(system => dbPoints(system).length >= 1)
-        && ['postgresql', 'mongodb'].every(system => dbPoints(system).length >= 2)
+        && ['postgresql', 'mongodb', 'ldap'].every(system => dbPoints(system).length >= 2)
+        && otlpMetrics.some(m => m.metric.name === 'db.client.connection.wait_time')
         && spansFor('9bf92f3577b34da6a3ce929d0e0e4736').length >= 1
         && spansFor('4bf92f3577b34da6a3ce929d0e0e4736').length >= 3
         && spansFor('3bf92f3577b34da6a3ce929d0e0e4736').length >= 3
@@ -973,9 +975,23 @@ describe('fastify-txstate', () => {
       expect(postgres.find(p => !otlpAttributes(p.attributes)['error.type'])).to.include({ count: '2' })
       expect(otlpAttributes(postgres.find(p => otlpAttributes(p.attributes)['error.type'])!.attributes)).to.deep.equal({ 'db.system.name': 'postgresql', 'db.namespace': 'app', 'server.address': 'pg', 'server.port': '5432', 'error.type': '23505' })
       expect(dbPoints('mongodb').map(p => otlpAttributes(p.attributes)['error.type'])).to.have.members([undefined, 'DuplicateKey'])
+      expect(dbPoints('ldap').map(p => otlpAttributes(p.attributes))).to.have.deep.members([
+        { 'db.system.name': 'ldap', 'db.operation.name': 'search', 'server.address': 'ldap', 'server.port': '636' },
+        { 'db.system.name': 'ldap', 'db.operation.name': 'modify', 'server.address': 'ldap', 'server.port': '636', 'error.type': 'NoSuchObjectError' }
+      ])
       const [sqlite] = dbPoints('sqlite')
       expect(otlpAttributes(sqlite.attributes)).to.deep.equal({ 'db.system.name': 'sqlite', 'db.namespace': '/data/app.db' })
       expect(sqlite.sum).to.be.closeTo(0.005, 0.0001)
+    })
+
+    it('should export db.client.connection.wait_time by pool', () => {
+      const metric = otlpMetrics.findLast(m => m.metric.name === 'db.client.connection.wait_time')
+      expect(metric, 'histogram never reached the collector').to.exist
+      expect(metric!.metric.unit).to.equal('s')
+      const [point] = metric!.metric.histogram!.dataPoints
+      expect(otlpAttributes(point.attributes)).to.deep.equal({ 'db.system.name': 'ldap', 'db.client.connection.pool.name': 'ldap:636' })
+      expect(point).to.include({ count: '1' })
+      expect(point.sum).to.be.closeTo(0.025, 0.0001)
     })
 
     it('should export an app\'s own metrics and logs under its own scope', () => {
@@ -1206,6 +1222,31 @@ describe('fastify-txstate', () => {
       expect(save!.span.status?.code).to.equal(2)
       expect(save!.attributes).to.include({ 'error.type': 'DuplicateKey', 'db.response.status_code': '11000' })
       expect(save!.span.events?.some(e => e.name === 'exception')).to.equal(true)
+    })
+
+    it('should trace ldap-async operations, without filter values or DNs', () => {
+      const spans = spansFor('0df92f3577b34da6a3ce929d0e0e4736')
+      const server = spans.find(s => s.span.kind === 2)
+      const search = spans.find(s => s.span.name === 'ldap search')
+      const modify = spans.find(s => s.span.name === 'ldap modify')
+      expect(search, 'search span never reached the collector').to.exist
+      expect(modify, 'modify span never reached the collector').to.exist
+      expect(search!.span.parentSpanId).to.equal(server?.span.spanId)
+      expect(search!.span.kind).to.equal(3)
+      expect(search!.attributes).to.include({
+        'db.system.name': 'ldap',
+        'db.operation.name': 'search',
+        'db.query.text': '(&(objectClass=?)(|(uid=?)(cn=?))(mail=*))',
+        'db.response.returned_rows': '2',
+        'ldap.search.scope': 'sub',
+        'server.address': 'ldap',
+        'server.port': '636'
+      })
+      expect(JSON.stringify(search!.attributes)).not.to.include('secret')
+      expect(JSON.stringify(modify!.attributes)).not.to.include('secret')
+      expect(modify!.attributes).not.to.have.property('db.query.text')
+      expect(modify!.span.status?.code).to.equal(2)
+      expect(modify!.attributes).to.include({ 'error.type': 'NoSuchObjectError', 'db.response.status_code': '32' })
     })
 
     it('should record an exception on a failed request\'s span', () => {

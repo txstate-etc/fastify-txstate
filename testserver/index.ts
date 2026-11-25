@@ -156,6 +156,16 @@ server.swagger().then(async () => {
     await rescue(tracingChannel('mongoose:model:save').tracePromise(async () => { await sleep(5); throw duplicate }, { operation: 'save', collection: 'users', ...conn, args: {} }))
     return {}
   })
+  // publishes what ldap-async does: a search that returns two entries, then a modify of an entry that doesn't exist
+  server.app.get('/tracing/ldap', async (req, res) => {
+    const conn = { serverAddress: 'ldap', serverPort: 636 }
+    const search = { operation: 'search', dn: 'ou=people,dc=example,dc=edu', filter: '(&(objectClass=person)(|(uid=secret)(cn=Sec*))(mail=*))', scope: 'sub', ...conn, entries: undefined as number | undefined }
+    channel('ldap-async:connection:wait').publish({ poolName: 'ldap:636', serverAddress: 'ldap', serverPort: 636, duration: 25 })
+    await tracingChannel('ldap-async:operation').tracePromise(async () => { await sleep(5); search.entries = 2 }, search)
+    const noSuchObject = Object.assign(new Error('No Such Object'), { name: 'NoSuchObjectError', code: 32 })
+    await rescue(tracingChannel('ldap-async:operation').tracePromise(async () => { await sleep(5); throw noSuchObject }, { operation: 'modify', dn: 'uid=secret,ou=people,dc=example,dc=edu', ...conn }))
+    return {}
+  })
   // what a library that makes spans through @opentelemetry/api does
   server.app.get('/tracing/api', async (req, res) => await tracer.startActiveSpan('testserver.work', { attributes: { 'testserver.tags': ['a', 'b'] } }, async span => {
     await fetch('http://fastify-test:4318/echo')
